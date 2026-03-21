@@ -13,6 +13,8 @@ Run a NOX mixnet node for **Hisoka Protocol** — a privacy-first DeFi protocol 
 - **Public IPv4** address with TCP port `15000` open
 - **Ethereum RPC** endpoint — public Arbitrum Sepolia RPC works: `https://sepolia-rollup.arbitrum.io/rpc`
 
+> **macOS (Apple Silicon):** The image supports both `linux/amd64` and `linux/arm64`. If you're on an older image version that only has amd64, add `--platform linux/amd64` to docker commands (Docker Desktop will emulate via Rosetta).
+
 ---
 
 ## Quick Start
