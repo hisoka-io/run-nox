@@ -1,0 +1,121 @@
+# NOX Relay Node Configuration — Arbitrum Sepolia Testnet
+# Version: v0.1.1-testnet
+#
+# Relay nodes forward Sphinx packets through the mixnet.
+# They do NOT execute on-chain transactions and do NOT need an ETH wallet.
+#
+# Setup:
+#   1. Copy this file: cp configs/relay.toml config.toml
+#   2. Replace YOUR_PUBLIC_IP below with your server's public IPv4 address
+#   3. Private keys are loaded from .env (generate with `nox keygen`)
+
+# --- Core ---
+
+# Ethereum RPC — used for topology sync (reading NoxRegistry events)
+# Public Arbitrum Sepolia RPC works fine for relay nodes.
+eth_rpc_url = "https://sepolia-rollup.arbitrum.io/rpc"
+
+# Chain ID: 421614 = Arbitrum Sepolia
+chain_id = 421614
+
+# Node role: "relay" = entry/mix forwarding only (no wallet, no TX execution)
+node_role = "relay"
+
+# Price oracle sidecar (runs alongside nox via docker-compose)
+oracle_url = "http://127.0.0.1:15004"
+
+# --- Contract Addresses (Arbitrum Sepolia, deployed 2026-03-17) ---
+
+# NoxRegistry: node registration, topology, staking
+registry_contract_address = "0x5e00d71a66804f58dAd2dFa6dA6857F6B1F1F4F2"
+
+# RelayerMulticall: not needed for relay nodes, but included for completeness
+relayer_multicall_address = "0xCc09Fe53bC36c0F34996A6AD3088E937Ef44C94E"
+
+# NoxRewardPool: not needed for relay nodes, but included for completeness
+nox_reward_pool_address = "0x89277aD4519d62AC9C26E431eb6236C30C893956"
+
+# --- Keys (loaded from .env via environment variables) ---
+# Generate: docker run --rm ghcr.io/hisoka-io/nox:0.1.1-testnet keygen > .env
+routing_private_key = ""
+p2p_private_key = ""
+eth_wallet_private_key = ""
+
+# --- Networking ---
+
+# libp2p P2P port — MUST be publicly reachable (open TCP in firewall)
+p2p_port = 15000
+p2p_listen_addr = "0.0.0.0"
+
+# P2P identity persistence (inside Docker volume)
+p2p_identity_path = "/var/lib/nox/identity/p2p_id.key"
+
+# Admin/metrics API (localhost-only by default)
+metrics_port = 15001
+
+# HTTP ingress for client Sphinx packets (entry nodes)
+# Set to 15002 if you want your node to accept client packets directly.
+# Set to 0 to disable (mix-only relay).
+ingress_port = 15002
+
+# Public topology API — other nodes can bootstrap from this endpoint
+# Set to 15003 if you want to serve as a seed node. Set to 0 to disable.
+topology_api_port = 15003
+
+# Topology bootstrap — fetch initial peer list from existing seed nodes
+bootstrap_topology_urls = [
+    "http://3.236.170.102:15003/topology",
+    "http://100.56.12.65:15003/topology"
+]
+
+# --- Relay Pipeline ---
+
+# PoW difficulty for incoming packets (0 = no PoW, 3 = default)
+min_pow_difficulty = 3
+
+# Sled database path (inside Docker volume)
+db_path = "/var/lib/nox/data/db"
+
+# Block polling interval (seconds). Arb Sepolia produces blocks every ~0.25s,
+# but 5s is fine for topology sync.
+block_poll_interval_secs = 5
+
+# Start scanning from this block number (skip old history).
+# Set to a recent block to avoid scanning millions of empty blocks.
+chain_start_block = 251066390
+
+# Max signed broadcast TX size (bytes). 256 KB for L2.
+max_broadcast_tx_size = 262144
+
+# SURB response buffer prune interval (seconds)
+response_prune_interval_secs = 60
+
+# --- [network] P2P Settings ---
+
+[network]
+max_connections = 500
+max_connections_per_peer = 2
+ping_interval_secs = 15
+idle_connection_timeout_secs = 3600
+
+# Rate limiting (packets/sec by reputation tier)
+[network.rate_limit]
+burst_unknown = 50
+rate_unknown = 100
+burst_trusted = 100
+rate_trusted = 200
+
+# --- [relayer] Sphinx Relay Pipeline ---
+
+[relayer]
+queue_size = 10000
+worker_count = 2               # Auto-detects CPU count if omitted
+mix_delay_ms = 200.0           # Poisson mixing delay (ms). Higher = more privacy, more latency.
+cover_traffic_rate = 0.02      # Loop cover packets/sec (~1 every 50s)
+drop_traffic_rate = 0.02       # Drop cover packets/sec (~1 every 50s)
+replay_window = 3600           # Replay tag TTL (seconds)
+bloom_capacity = 100000        # Bloom filter capacity per window
+
+[relayer.fragmentation]
+timeout_seconds = 300
+prune_interval_seconds = 60

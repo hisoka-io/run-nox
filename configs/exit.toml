@@ -1,0 +1,124 @@
+# NOX Exit Node Configuration — Arbitrum Sepolia Testnet
+# Version: v0.1.1-testnet
+#
+# Exit nodes execute on-chain transactions (ZK proof submission, swaps, etc.)
+# They require an ETH wallet funded with gas and a price oracle for profitability.
+#
+# Setup:
+#   1. Copy this file: cp configs/exit.toml config.toml
+#   2. Replace YOUR_PUBLIC_IP below with your server's public IPv4 address
+#   3. Private keys are loaded from .env (generate with `nox keygen`)
+#   4. Fund your ETH wallet with Arb Sepolia ETH (see REGISTRATION.md)
+
+# --- Core ---
+
+# Ethereum RPC — used for topology sync AND transaction submission
+# For exit nodes, a reliable RPC is important. Public RPC works for testnet.
+eth_rpc_url = "https://sepolia-rollup.arbitrum.io/rpc"
+
+# Chain ID: 421614 = Arbitrum Sepolia
+chain_id = 421614
+
+# Node role: "exit" = executes on-chain transactions
+node_role = "exit"
+
+# Price oracle sidecar (runs alongside nox via docker-compose)
+# Required for exit nodes — used for gas profitability calculations
+oracle_url = "http://127.0.0.1:15004"
+
+# --- Contract Addresses (Arbitrum Sepolia, deployed 2026-03-17) ---
+
+# NoxRegistry: node registration, topology, staking
+registry_contract_address = "0x5e00d71a66804f58dAd2dFa6dA6857F6B1F1F4F2"
+
+# RelayerMulticall: batched TX execution (payment + action)
+relayer_multicall_address = "0xCc09Fe53bC36c0F34996A6AD3088E937Ef44C94E"
+
+# NoxRewardPool: ZK gas payment validation and reward deposit
+nox_reward_pool_address = "0x89277aD4519d62AC9C26E431eb6236C30C893956"
+
+# --- Keys (loaded from .env via environment variables) ---
+# Generate: docker run --rm ghcr.io/hisoka-io/nox:0.1.1-testnet keygen > .env
+routing_private_key = ""
+p2p_private_key = ""
+eth_wallet_private_key = ""
+
+# --- Economics ---
+
+# Minimum ETH balance before warning (wei). Default: 0.01 ETH.
+# Exit nodes spend gas submitting transactions. Monitor this threshold.
+min_gas_balance = "10000000000000000"
+
+# Minimum profit margin (%) to execute a transaction.
+# If gas_cost * 1.10 > revenue, the TX is dropped as unprofitable.
+min_profit_margin_percent = 10
+
+# --- Networking ---
+
+# libp2p P2P port — MUST be publicly reachable (open TCP in firewall)
+p2p_port = 15000
+p2p_listen_addr = "0.0.0.0"
+
+# P2P identity persistence (inside Docker volume)
+p2p_identity_path = "/var/lib/nox/identity/p2p_id.key"
+
+# Admin/metrics API (localhost-only by default)
+metrics_port = 15001
+
+# HTTP ingress — exit nodes typically don't accept client packets directly
+ingress_port = 0
+
+# Topology API — set to 15003 to serve as a seed node, 0 to disable
+topology_api_port = 0
+
+# Topology bootstrap — fetch initial peer list from existing seed nodes
+bootstrap_topology_urls = [
+    "http://3.236.170.102:15003/topology",
+    "http://100.56.12.65:15003/topology"
+]
+
+# --- Relay Pipeline ---
+
+min_pow_difficulty = 3
+db_path = "/var/lib/nox/data/db"
+block_poll_interval_secs = 5
+chain_start_block = 251066390
+max_broadcast_tx_size = 262144
+response_prune_interval_secs = 60
+
+# --- [http] HTTP Proxy (Exit Node) ---
+
+[http]
+# SSRF protection — NEVER set allow_private_ips = true in production
+allow_private_ips = false
+request_timeout_secs = 10
+max_response_bytes = 1048576    # 1 MB max response body
+
+# --- [network] P2P Settings ---
+
+[network]
+max_connections = 500
+max_connections_per_peer = 2
+ping_interval_secs = 15
+idle_connection_timeout_secs = 3600
+
+[network.rate_limit]
+burst_unknown = 50
+rate_unknown = 100
+burst_trusted = 100
+rate_trusted = 200
+
+# --- [relayer] Sphinx Relay Pipeline ---
+
+[relayer]
+queue_size = 10000
+worker_count = 2
+mix_delay_ms = 200.0
+cover_traffic_rate = 0.02
+drop_traffic_rate = 0.02
+replay_window = 3600
+bloom_capacity = 100000
+
+[relayer.fragmentation]
+timeout_seconds = 300
+prune_interval_seconds = 60

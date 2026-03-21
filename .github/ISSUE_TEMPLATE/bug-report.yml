@@ -1,0 +1,49 @@
+name: Bug Report
+description: Report an issue with your NOX node
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: NOX Version
+      description: "Run `docker run --rm ghcr.io/hisoka-io/nox:0.1.1-testnet --version` or check X-Nox-Version header"
+      placeholder: "0.1.1-testnet"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: role
+    attributes:
+      label: Node Role
+      options:
+        - relay
+        - exit
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: "Run `docker compose logs --tail 50 nox` and paste output. REDACT any private keys."
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration (sanitized)
+      description: "Paste your config.toml with private keys removed. Keep contract addresses and network settings."
+      render: toml
+    validations:
+      required: false

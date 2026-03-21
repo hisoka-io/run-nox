@@ -1,0 +1,68 @@
+name: Node Registration Request
+description: Request registration for your NOX node on the Hisoka testnet
+title: "[Registration] "
+labels: ["registration"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for running a NOX node! Fill out the details below and a maintainer will register your node on-chain.
+
+        **How to get these values:** Run `docker run --rm ghcr.io/hisoka-io/nox:0.1.1-testnet keygen` and copy the public values from the output.
+
+        **Do NOT share your private keys here.** Only share the values marked "for registration" in the keygen output.
+
+  - type: input
+    id: sphinx_public_key
+    attributes:
+      label: Sphinx Public Key (X25519)
+      description: 64-character hex string from `nox keygen` output (line starting with "# Public key")
+      placeholder: "e.g., 509a37616c1b66a025b095020a7750d95e6e3bc4fef7e004ecc77d0195acd317"
+    validations:
+      required: true
+
+  - type: input
+    id: eth_address
+    attributes:
+      label: ETH Address
+      description: Your node's Ethereum address from keygen output (line starting with "# Address")
+      placeholder: "0x..."
+    validations:
+      required: true
+
+  - type: input
+    id: multiaddr
+    attributes:
+      label: P2P Multiaddr
+      description: "Your node's public address in multiaddr format: /ip4/YOUR_PUBLIC_IP/tcp/15000"
+      placeholder: "/ip4/203.0.113.1/tcp/15000"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: role
+    attributes:
+      label: Node Role
+      description: Relay (entry/mix forwarding) or Exit (on-chain TX execution)
+      options:
+        - relay
+        - exit
+    validations:
+      required: true
+
+  - type: input
+    id: peer_id
+    attributes:
+      label: PeerId (optional)
+      description: "From keygen output or node logs. Starts with 12D3KooW... Helps verify connectivity."
+      placeholder: "12D3KooW..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Information
+      description: Region/cloud provider, motivation, or anything else relevant
+    validations:
+      required: false
