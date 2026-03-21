@@ -7,7 +7,7 @@ NOX nodes must be registered on-chain in the NoxRegistry contract before they ca
 ### 1. Generate Your Keys
 
 ```bash
-docker run --rm ghcr.io/hisoka-io/nox:0.1.1-testnet keygen
+docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen
 ```
 
 Save the full output. You'll need:
@@ -24,7 +24,7 @@ cp configs/relay.toml config.toml
 # Replace any instance of YOUR_PUBLIC_IP with your server's IPv4
 
 # Copy keygen output to .env
-docker run --rm ghcr.io/hisoka-io/nox:0.1.1-testnet keygen > .env
+docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen > .env
 
 # Start the node
 docker compose up -d

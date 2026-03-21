@@ -2,7 +2,7 @@
 
 Run a NOX mixnet node for **Hisoka Protocol** — a privacy-first DeFi protocol on Ethereum. NOX nodes form a 3-layer Sphinx mixnet that provides network-layer privacy for on-chain transactions, hiding sender identity, recipient, and transaction content from observers.
 
-**Current version:** `v0.1.1-testnet` | **Network:** Arbitrum Sepolia | **Image:** `ghcr.io/hisoka-io/nox:0.1.1-testnet`
+**Current version:** `v0.1.2-testnet` | **Network:** Arbitrum Sepolia | **Image:** `ghcr.io/hisoka-io/nox:0.1.2-testnet`
 
 ---
 
@@ -21,10 +21,10 @@ Run a NOX mixnet node for **Hisoka Protocol** — a privacy-first DeFi protocol 
 
 ```bash
 # 1. Pull the image
-docker pull ghcr.io/hisoka-io/nox:0.1.1-testnet
+docker pull ghcr.io/hisoka-io/nox:0.1.2-testnet
 
 # 2. Generate keys (save this output!)
-docker run --rm ghcr.io/hisoka-io/nox:0.1.1-testnet keygen > .env
+docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen > .env
 
 # 3. Clone this repo and copy a config template
 git clone https://github.com/hisoka-io/run-nox.git && cd run-nox
@@ -44,12 +44,113 @@ Your node won't find peers until it's registered on-chain. See [REGISTRATION.md]
 
 ---
 
+## Running an Exit Node
+
+Exit nodes are the final hop in the mixnet — they decrypt the innermost Sphinx layer, extract the user's transaction payload, and submit it on-chain. This means exit nodes need an ETH wallet with gas funding and interact directly with Ethereum smart contracts.
+
+### Exit Node Quick Start
+
+```bash
+# 1. Pull the image
+docker pull ghcr.io/hisoka-io/nox:0.1.2-testnet
+
+# 2. Generate keys (ALL three keys are needed for exit nodes)
+docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen > .env
+
+# 3. Clone this repo and use the EXIT config template
+git clone https://github.com/hisoka-io/run-nox.git && cd run-nox
+cp configs/exit.toml config.toml
+
+# 4. Edit config.toml:
+#    - Replace YOUR_PUBLIC_IP with your server's public IPv4
+#    - Verify contract addresses match the network you're joining
+#    - Set eth_rpc_url to a reliable RPC endpoint
+
+# 5. Fund your ETH wallet
+#    Get your address from .env (line: "# Address (for registration): 0x...")
+#    Send 0.1 ETH to that address on Arbitrum Sepolia
+#    Faucet: https://faucet.quicknode.com/arbitrum/sepolia
+
+# 6. Start the node
+docker compose up -d
+
+# 7. Check it's running
+docker exec nox-node curl -sf http://127.0.0.1:15001/topology
+
+# 8. Submit a registration request with role=exit (see REGISTRATION.md)
+```
+
+### What Exit Nodes Do
+
+1. **Receive Sphinx packets** from mix nodes via P2P
+2. **Decrypt the final layer** using the X25519 routing key
+3. **Extract the payload** — a `RelayerPayload` containing a multicall bundle (ZK proof + DeFi action)
+4. **Simulate the transaction** via `eth_simulateV1` to check if it will succeed
+5. **Check profitability** — compare gas cost vs fee revenue using the price oracle
+6. **Submit on-chain** if profitable — calls `RelayerMulticall.multicall()` which atomically:
+   - Executes `DarkPool.payRelayer()` (ZK gas payment, must succeed)
+   - Executes the user's DeFi action (may fail without reverting payment)
+7. **Return the result** to the user via SURB (Single-Use Reply Block) through the mixnet
+
+### Exit Node Requirements
+
+| Requirement | Details |
+|-------------|---------|
+| **ETH wallet** | secp256k1 private key in `.env` (`NOX__ETH_WALLET_PRIVATE_KEY`) |
+| **Gas funding** | ETH on Arbitrum Sepolia. ~0.1 ETH lasts weeks on testnet. |
+| **Price oracle** | Runs automatically via `docker-compose` (price-server sidecar on port 15004) |
+| **RPC endpoint** | Must support `eth_simulateV1` or `debug_traceCall`. Public Arb Sepolia RPC works. |
+| **Contract addresses** | All 3 required: `registry_contract_address`, `relayer_multicall_address`, `nox_reward_pool_address` |
+| **Config** | `node_role = "exit"` and `oracle_url = "http://127.0.0.1:15004"` |
+
+### Profitability Engine
+
+Exit nodes don't blindly submit every transaction. The profitability engine protects you from losing gas:
+
+```
+Revenue = fee_amount × token_price_usd ÷ 10^decimals
+Gas Cost = gas_used × gas_price × eth_price_usd ÷ 10^18
+Margin = Revenue ÷ Gas Cost
+
+If Margin >= 1.10 (10% profit) → SUBMIT
+If Margin < 1.10              → DROP (logged as "Unprofitable")
+```
+
+You can adjust the threshold via `min_profit_margin_percent` in your config. The default 10% means you only submit transactions where you earn at least 10% above gas cost.
+
+**"Unprofitable TX dropped" in logs is normal** — it means the profitability engine is working correctly and protecting your wallet.
+
+### Monitoring Your Exit Node
+
+```bash
+# Check wallet balance
+cast balance YOUR_ETH_ADDRESS --rpc-url https://sepolia-rollup.arbitrum.io/rpc
+
+# Check submitted transactions
+docker compose logs nox | grep -i "submit\|confirm\|revert\|profitab"
+
+# Check price oracle health
+curl http://localhost:15004/health
+
+# Check gas balance warnings
+docker compose logs nox | grep -i "gas_balance\|low balance"
+```
+
+### Exit Node Security
+
+- **SSRF protection** is enabled by default (`allow_private_ips = false`) — the HTTP proxy blocks requests to localhost, private IPs, and link-local addresses
+- **Private keys are never logged** — all sensitive fields are redacted in debug output
+- **Keys are zeroized on drop** — memory is cleared when the node shuts down
+- Exit nodes are economically accountable: your ETH address is registered on-chain and visible to the network
+
+---
+
 ## Key Generation
 
 The `nox keygen` command generates all cryptographic keys your node needs:
 
 ```bash
-docker run --rm ghcr.io/hisoka-io/nox:0.1.1-testnet keygen
+docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen
 ```
 
 Output:
@@ -158,7 +259,7 @@ NOX__RELAYER__MIX_DELAY_MS=500.0
 | `relayer_multicall_address` | `0x000...000` | `NOX__RELAYER_MULTICALL_ADDRESS` | RelayerMulticall — batched TX execution (gas payment + user action). Exit nodes only. |
 | `nox_reward_pool_address` | `0x000...000` | `NOX__NOX_REWARD_POOL_ADDRESS` | NoxRewardPool — ZK gas payment validation and reward deposits. Exit nodes only. |
 
-**Arbitrum Sepolia addresses (v0.1.1-testnet):**
+**Arbitrum Sepolia addresses (v0.1.2-testnet):**
 | Contract | Address |
 |----------|---------|
 | DarkPool | `0xd1CDd9474b5Caf67F95F871503E5774Fd6aD0F16` |
