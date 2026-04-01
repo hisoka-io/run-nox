@@ -5,7 +5,7 @@
 # For full key generation including public key derivation and PeerId,
 # use the Docker-based approach instead:
 #
-#   docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen > .env
+#   docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen > .env
 #
 # This script is a fallback for environments without Docker.
 
@@ -16,7 +16,7 @@ echo "# Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "# SAVE THIS OUTPUT. Private keys cannot be recovered."
 echo "#"
 echo "# To derive public keys (sphinx key, PeerId, ETH address),"
-echo "# use: docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen"
+echo "# use: docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen"
 echo ""
 echo "# === Sphinx Routing Key (X25519) ==="
 echo "NOX__ROUTING_PRIVATE_KEY=$(openssl rand -hex 32)"
