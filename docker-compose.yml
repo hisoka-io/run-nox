@@ -1,4 +1,4 @@
-# NOX Mixnet Node — Docker Compose
+# NOX Mixnet Node -Docker Compose
 # Docs: https://github.com/hisoka-io/run-nox
 #
 # Quick start:
@@ -61,6 +61,6 @@ services:
       start_period: 30s
 
 volumes:
-  nox-identity:   # P2P identity key — persists across upgrades
-  nox-data:       # Sled database — persists across upgrades
+  nox-identity:   # P2P identity key -persists across upgrades
+  nox-data:       # Sled database -persists across upgrades
   nox-logs:       # Per-level log files (debug, info, warn, error)

@@ -1,4 +1,4 @@
-# NOX Exit Node Configuration — Arbitrum Sepolia Testnet
+# NOX Exit Node Configuration -Arbitrum Sepolia Testnet
 # Version: v0.2.0-testnet
 #
 # Exit nodes execute on-chain transactions (ZK proof submission, swaps, etc.)
@@ -11,7 +11,7 @@
 
 # --- Core ---
 
-# Ethereum RPC — used for topology sync AND transaction submission
+# Ethereum RPC -used for topology sync AND transaction submission
 # For exit nodes, a reliable RPC is important. Public RPC works for testnet.
 eth_rpc_url = "https://sepolia-rollup.arbitrum.io/rpc"
 
@@ -22,7 +22,7 @@ chain_id = 421614
 node_role = "exit"
 
 # Price oracle sidecar (runs alongside nox via docker-compose)
-# Required for exit nodes — used for gas profitability calculations
+# Required for exit nodes -used for gas profitability calculations
 oracle_url = "http://127.0.0.1:15004"
 
 # --- Contract Addresses (Arbitrum Sepolia, deployed 2026-03-17) ---
@@ -54,7 +54,7 @@ min_profit_margin_percent = 10
 
 # --- Networking ---
 
-# libp2p P2P port — MUST be publicly reachable (open TCP in firewall)
+# libp2p P2P port -MUST be publicly reachable (open TCP in firewall)
 p2p_port = 15000
 p2p_listen_addr = "0.0.0.0"
 
@@ -64,13 +64,13 @@ p2p_identity_path = "/var/lib/nox/identity/p2p_id.key"
 # Admin/metrics API (localhost-only by default)
 metrics_port = 15001
 
-# HTTP ingress — exit nodes typically don't accept client packets directly
+# HTTP ingress -exit nodes typically don't accept client packets directly
 ingress_port = 0
 
-# Topology API — set to 15003 to serve as a seed node, 0 to disable
+# Topology API -set to 15003 to serve as a seed node, 0 to disable
 topology_api_port = 0
 
-# Topology bootstrap — fetch initial peer list from the Hisoka seed service
+# Topology bootstrap -fetch initial peer list from the Hisoka seed service
 bootstrap_topology_urls = [
     "https://api.hisoka.io/seed/topology"
 ]
@@ -87,7 +87,7 @@ response_prune_interval_secs = 60
 # --- [http] HTTP Proxy (Exit Node) ---
 
 [http]
-# SSRF protection — NEVER set allow_private_ips = true in production
+# SSRF protection -NEVER set allow_private_ips = true in production
 allow_private_ips = false
 request_timeout_secs = 120
 max_response_bytes = 134217728  # 128 MB max response body

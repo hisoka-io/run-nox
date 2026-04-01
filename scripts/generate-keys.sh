@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# generate-keys.sh — Generate NOX node private keys using OpenSSL
+# generate-keys.sh -Generate NOX node private keys using OpenSSL
 #
 # This script generates random private keys for a NOX node.
 # For full key generation including public key derivation and PeerId,

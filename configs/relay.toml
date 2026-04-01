@@ -1,4 +1,4 @@
-# NOX Relay Node Configuration — Arbitrum Sepolia Testnet
+# NOX Relay Node Configuration -Arbitrum Sepolia Testnet
 # Version: v0.2.0-testnet
 #
 # Relay nodes forward Sphinx packets through the mixnet.
@@ -10,7 +10,7 @@
 
 # --- Core ---
 
-# Ethereum RPC — used for topology sync (reading NoxRegistry events)
+# Ethereum RPC -used for topology sync (reading NoxRegistry events)
 # Public Arbitrum Sepolia RPC works fine for relay nodes.
 eth_rpc_url = "https://sepolia-rollup.arbitrum.io/rpc"
 
@@ -42,7 +42,7 @@ eth_wallet_private_key = ""
 
 # --- Networking ---
 
-# libp2p P2P port — MUST be publicly reachable (open TCP in firewall)
+# libp2p P2P port -MUST be publicly reachable (open TCP in firewall)
 p2p_port = 15000
 p2p_listen_addr = "0.0.0.0"
 
@@ -57,11 +57,11 @@ metrics_port = 15001
 # Set to 0 to disable (mix-only relay).
 ingress_port = 15002
 
-# Public topology API — other nodes can bootstrap from this endpoint
+# Public topology API -other nodes can bootstrap from this endpoint
 # Set to 15003 if you want to serve as a seed node. Set to 0 to disable.
 topology_api_port = 15003
 
-# Topology bootstrap — fetch initial peer list from the Hisoka seed service
+# Topology bootstrap -fetch initial peer list from the Hisoka seed service
 bootstrap_topology_urls = [
     "https://api.hisoka.io/seed/topology"
 ]
