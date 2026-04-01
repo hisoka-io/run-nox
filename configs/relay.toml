@@ -1,13 +1,12 @@
 # NOX Relay Node Configuration — Arbitrum Sepolia Testnet
-# Version: v0.1.2-testnet
+# Version: v0.2.0-testnet
 #
 # Relay nodes forward Sphinx packets through the mixnet.
 # They do NOT execute on-chain transactions and do NOT need an ETH wallet.
 #
 # Setup:
 #   1. Copy this file: cp configs/relay.toml config.toml
-#   2. Replace YOUR_PUBLIC_IP below with your server's public IPv4 address
-#   3. Private keys are loaded from .env (generate with `nox keygen`)
+#   2. Private keys are loaded from .env (generate with `nox keygen`)
 
 # --- Core ---
 
@@ -36,7 +35,7 @@ relayer_multicall_address = "0xCc09Fe53bC36c0F34996A6AD3088E937Ef44C94E"
 nox_reward_pool_address = "0x89277aD4519d62AC9C26E431eb6236C30C893956"
 
 # --- Keys (loaded from .env via environment variables) ---
-# Generate: docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen > .env
+# Generate: docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen > .env
 routing_private_key = ""
 p2p_private_key = ""
 eth_wallet_private_key = ""
@@ -62,10 +61,9 @@ ingress_port = 15002
 # Set to 15003 if you want to serve as a seed node. Set to 0 to disable.
 topology_api_port = 15003
 
-# Topology bootstrap — fetch initial peer list from existing seed nodes
+# Topology bootstrap — fetch initial peer list from the Hisoka seed service
 bootstrap_topology_urls = [
-    "http://3.236.170.102:15003/topology",
-    "http://100.56.12.65:15003/topology"
+    "https://api.hisoka.io/seed/topology"
 ]
 
 # --- Relay Pipeline ---

@@ -4,38 +4,28 @@ NOX nodes must be registered on-chain in the NoxRegistry contract before they ca
 
 ## Steps
 
-### 1. Generate Your Keys
+### 1. Generate Keys and Start Your Node
 
 ```bash
-docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen
-```
+# Clone this repo
+git clone https://github.com/hisoka-io/run-nox.git && cd run-nox
 
-Save the full output. You'll need:
-- **Private keys** → paste into your `.env` file (never share these)
-- **Public values** → share in your registration request
+# Generate keys (save this output — private keys cannot be recovered)
+docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen | tee .env
 
-### 2. Start Your Node
-
-```bash
-# Copy a config template
+# Copy a config template (relay or exit)
 cp configs/relay.toml config.toml
-
-# Edit config.toml — set your public IP address
-# Replace any instance of YOUR_PUBLIC_IP with your server's IPv4
-
-# Copy keygen output to .env
-docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen > .env
 
 # Start the node
 docker compose up -d
 ```
 
-Your node will boot and begin polling the chain for topology updates. It won't find peers yet — that's expected until you're registered.
+First startup takes ~60 seconds (price-server healthcheck + nox initialization). Your node will begin polling the chain for topology updates but won't find peers until registered.
 
-### 3. Verify Your Node is Running
+### 2. Verify Your Node is Running
 
 ```bash
-# Check health
+# Wait 60s for startup, then check health
 curl http://localhost:15001/topology
 
 # Check logs
@@ -44,7 +34,7 @@ docker compose logs -f nox
 
 You should see the node polling blocks and waiting for peer connections.
 
-### 4. Submit a Registration Request
+### 3. Submit a Registration Request
 
 Open an issue using the [Node Registration Request](https://github.com/hisoka-io/run-nox/issues/new?template=node-registration-request.yml) template.
 
@@ -54,21 +44,21 @@ You'll need to provide:
 |-------|-----------------|
 | **Sphinx Public Key** | `nox keygen` output: line `# Public key (for registration): ...` |
 | **ETH Address** | `nox keygen` output: line `# Address (for registration): 0x...` |
-| **P2P Multiaddr** | `/ip4/YOUR_PUBLIC_IP/tcp/15000` |
+| **P2P Multiaddr** | `/ip4/YOUR_PUBLIC_IP/tcp/15000` (replace with your server's public IPv4) |
 | **Node Role** | `relay` or `exit` |
-| **PeerId** (optional) | `nox keygen` output or from node logs |
+| **PeerId** (optional) | `nox keygen` output or from `docker compose logs nox | grep PeerId` |
 
-### 5. Wait for Approval
+### 4. Wait for Approval
 
 A maintainer will register your node on-chain using `nox-ctl`. You'll be notified on the issue when registration is complete.
 
-### 6. Verify Registration
+### 5. Verify Registration
 
 After registration, your node should automatically discover peers within 1-2 block poll intervals (~10 seconds on Arbitrum Sepolia).
 
 ```bash
 # Check that your node sees other peers
-curl http://localhost:15001/topology | python3 -m json.tool
+curl -s http://localhost:15001/topology | python3 -m json.tool
 ```
 
 You should see a list of nodes including your own.
@@ -98,3 +88,6 @@ The node checks profitability before submitting transactions: it only submits if
 - Check firewall: `sudo ufw allow 15000/tcp`
 - Ensure `p2p_listen_addr = "0.0.0.0"` (not `127.0.0.1`)
 - Check Docker uses `network_mode: host`
+
+**Changed node role and node won't start**
+- Clean volumes and restart: `docker compose down -v && docker compose up -d`

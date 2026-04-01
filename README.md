@@ -2,7 +2,7 @@
 
 Run a NOX mixnet node for **Hisoka Protocol** — a privacy-first DeFi protocol on Ethereum. NOX nodes form a 3-layer Sphinx mixnet that provides network-layer privacy for on-chain transactions, hiding sender identity, recipient, and transaction content from observers.
 
-**Current version:** `v0.1.2-testnet` | **Network:** Arbitrum Sepolia | **Image:** `ghcr.io/hisoka-io/nox:0.1.2-testnet`
+**Current version:** `v0.2.0-testnet` | **Network:** Arbitrum Sepolia | **Image:** `ghcr.io/hisoka-io/nox:0.2.0-testnet`
 
 ---
 
@@ -13,7 +13,7 @@ Run a NOX mixnet node for **Hisoka Protocol** — a privacy-first DeFi protocol 
 - **Public IPv4** address with TCP port `15000` open
 - **Ethereum RPC** endpoint — public Arbitrum Sepolia RPC works: `https://sepolia-rollup.arbitrum.io/rpc`
 
-> **macOS (Apple Silicon):** The image supports both `linux/amd64` and `linux/arm64`. If you're on an older image version that only has amd64, add `--platform linux/amd64` to docker commands (Docker Desktop will emulate via Rosetta).
+> **macOS (Apple Silicon):** The image is `linux/amd64` only. Docker Desktop will emulate via Rosetta automatically. If you see platform warnings, add `--platform linux/amd64` to docker commands.
 
 ---
 
@@ -21,10 +21,10 @@ Run a NOX mixnet node for **Hisoka Protocol** — a privacy-first DeFi protocol 
 
 ```bash
 # 1. Pull the image
-docker pull ghcr.io/hisoka-io/nox:0.1.2-testnet
+docker pull ghcr.io/hisoka-io/nox:0.2.0-testnet
 
 # 2. Generate keys (save this output!)
-docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen > .env
+docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen > .env
 
 # 3. Clone this repo and copy a config template
 git clone https://github.com/hisoka-io/run-nox.git && cd run-nox
@@ -52,10 +52,10 @@ Exit nodes are the final hop in the mixnet — they decrypt the innermost Sphinx
 
 ```bash
 # 1. Pull the image
-docker pull ghcr.io/hisoka-io/nox:0.1.2-testnet
+docker pull ghcr.io/hisoka-io/nox:0.2.0-testnet
 
 # 2. Generate keys (ALL three keys are needed for exit nodes)
-docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen > .env
+docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen > .env
 
 # 3. Clone this repo and use the EXIT config template
 git clone https://github.com/hisoka-io/run-nox.git && cd run-nox
@@ -150,7 +150,7 @@ docker compose logs nox | grep -i "gas_balance\|low balance"
 The `nox keygen` command generates all cryptographic keys your node needs:
 
 ```bash
-docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen
+docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen
 ```
 
 Output:
@@ -259,7 +259,7 @@ NOX__RELAYER__MIX_DELAY_MS=500.0
 | `relayer_multicall_address` | `0x000...000` | `NOX__RELAYER_MULTICALL_ADDRESS` | RelayerMulticall — batched TX execution (gas payment + user action). Exit nodes only. |
 | `nox_reward_pool_address` | `0x000...000` | `NOX__NOX_REWARD_POOL_ADDRESS` | NoxRewardPool — ZK gas payment validation and reward deposits. Exit nodes only. |
 
-**Arbitrum Sepolia addresses (v0.1.2-testnet):**
+**Arbitrum Sepolia addresses (v0.2.0-testnet):**
 | Contract | Address |
 |----------|---------|
 | DarkPool | `0xd1CDd9474b5Caf67F95F871503E5774Fd6aD0F16` |
@@ -286,7 +286,7 @@ NOX__RELAYER__MIX_DELAY_MS=500.0
 | `metrics_port` | u16 | `9090` | `NOX__METRICS_PORT` | Admin API + Prometheus metrics port. Binds to localhost only. Testnet uses `15001`. |
 | `topology_api_port` | u16 | `0` (disabled) | `NOX__TOPOLOGY_API_PORT` | Public topology endpoint. Other nodes can bootstrap from this. Set to `15003` for seed nodes, `0` to disable. |
 | `ingress_port` | u16 | `0` (disabled) | `NOX__INGRESS_PORT` | HTTP packet injection port. Entry nodes set to `15002`. Clients send Sphinx packets here. |
-| `bootstrap_topology_urls` | Vec\<String\> | `[]` | `NOX__BOOTSTRAP_TOPOLOGY_URLS` | Seed node URLs for fast topology bootstrap. JSON array format in env vars. |
+| `bootstrap_topology_urls` | Vec\<String\> | `[]` | `NOX__BOOTSTRAP_TOPOLOGY_URLS` | Seed URLs for fast topology bootstrap. Default: `["https://api.hisoka.io/seed/topology"]`. |
 
 ### Economics
 
@@ -385,17 +385,20 @@ Nodes are classified into reputation tiers: unknown → trusted (after `trust_pr
 
 ### Firewall Rules
 
-**Relay node:**
-```bash
-sudo ufw allow 15000/tcp   # P2P (required)
-# Optional for entry/seed nodes:
-sudo ufw allow 15002/tcp   # HTTP ingress
-sudo ufw allow 15003/tcp   # Topology API
-```
+Open the ports your node role needs:
 
-**Exit node:**
+| Role | Ports to Open | Why |
+|------|---------------|-----|
+| **Mix-only relay** | `15000/tcp` | P2P |
+| **Entry node** (accepts client packets) | `15000/tcp`, `15002/tcp` | P2P + HTTP ingress |
+| **Seed node** (serves topology) | `15000/tcp`, `15002/tcp`, `15003/tcp` | P2P + HTTP ingress + topology API |
+| **Exit node** | `15000/tcp` | P2P only |
+
 ```bash
-sudo ufw allow 15000/tcp   # P2P (required)
+# Example: entry + seed node
+sudo ufw allow 15000/tcp
+sudo ufw allow 15002/tcp
+sudo ufw allow 15003/tcp
 ```
 
 ---
@@ -469,6 +472,7 @@ Data persists across upgrades via Docker named volumes:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
+| Node seems stuck after `docker compose up` | First startup takes ~60s (price-server healthcheck + nox startup) | Wait 60 seconds, then check `docker compose logs nox` |
 | "No peers found" | Node not registered on-chain | Submit registration request ([REGISTRATION.md](REGISTRATION.md)) |
 | "Config validation failed: routing_private_key is empty" | `.env` file missing or not loaded | Ensure `.env` is in the same directory as `docker-compose.yml` |
 | "Connection refused" on port 15000 | Firewall blocking P2P | `sudo ufw allow 15000/tcp` |
@@ -476,6 +480,7 @@ Data persists across upgrades via Docker named volumes:
 | "Unprofitable: revenue=$X, cost=$Y" | Gas cost > fee revenue | Normal for exit nodes — TX is dropped, not submitted |
 | "Lagged(N)" in logs | Event bus overflow | Temporary; node recovers automatically. If frequent, increase `relayer.queue_size`. |
 | Empty topology (0 nodes) | RPC issue or wrong contract address | Verify `eth_rpc_url` is reachable and `registry_contract_address` is correct |
+| Changed node role and node won't start | Stale database from previous role | Clean volumes: `docker compose down -v && docker compose up -d` |
 
 ---
 

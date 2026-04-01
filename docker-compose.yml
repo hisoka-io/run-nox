@@ -2,14 +2,14 @@
 # Docs: https://github.com/hisoka-io/run-nox
 #
 # Quick start:
-#   1. docker pull ghcr.io/hisoka-io/nox:0.1.2-testnet
-#   2. docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen > .env
+#   1. docker pull ghcr.io/hisoka-io/nox:0.2.0-testnet
+#   2. docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen > .env
 #   3. cp configs/relay.toml config.toml   # or configs/exit.toml
 #   4. docker compose up -d
 
 services:
   price-server:
-    image: ghcr.io/hisoka-io/nox:0.1.2-testnet
+    image: ghcr.io/hisoka-io/nox:0.2.0-testnet
     container_name: nox-price-server
     entrypoint: ["price_server"]
     environment:
@@ -31,7 +31,7 @@ services:
       start_period: 30s
 
   nox:
-    image: ghcr.io/hisoka-io/nox:0.1.2-testnet
+    image: ghcr.io/hisoka-io/nox:0.2.0-testnet
     container_name: nox-node
     network_mode: host
     volumes:

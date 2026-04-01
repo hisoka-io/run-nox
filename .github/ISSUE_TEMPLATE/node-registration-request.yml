@@ -8,7 +8,7 @@ body:
       value: |
         Thanks for running a NOX node! Fill out the details below and a maintainer will register your node on-chain.
 
-        **How to get these values:** Run `docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen` and copy the public values from the output.
+        **How to get these values:** Run `docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen` and copy the public values from the output.
 
         **Do NOT share your private keys here.** Only share the values marked "for registration" in the keygen output.
 

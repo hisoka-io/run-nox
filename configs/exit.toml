@@ -1,14 +1,13 @@
 # NOX Exit Node Configuration — Arbitrum Sepolia Testnet
-# Version: v0.1.2-testnet
+# Version: v0.2.0-testnet
 #
 # Exit nodes execute on-chain transactions (ZK proof submission, swaps, etc.)
 # They require an ETH wallet funded with gas and a price oracle for profitability.
 #
 # Setup:
 #   1. Copy this file: cp configs/exit.toml config.toml
-#   2. Replace YOUR_PUBLIC_IP below with your server's public IPv4 address
-#   3. Private keys are loaded from .env (generate with `nox keygen`)
-#   4. Fund your ETH wallet with Arb Sepolia ETH (see REGISTRATION.md)
+#   2. Private keys are loaded from .env (generate with `nox keygen`)
+#   3. Fund your ETH wallet with Arb Sepolia ETH (see REGISTRATION.md)
 
 # --- Core ---
 
@@ -38,7 +37,7 @@ relayer_multicall_address = "0xCc09Fe53bC36c0F34996A6AD3088E937Ef44C94E"
 nox_reward_pool_address = "0x89277aD4519d62AC9C26E431eb6236C30C893956"
 
 # --- Keys (loaded from .env via environment variables) ---
-# Generate: docker run --rm ghcr.io/hisoka-io/nox:0.1.2-testnet keygen > .env
+# Generate: docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen > .env
 routing_private_key = ""
 p2p_private_key = ""
 eth_wallet_private_key = ""
@@ -71,10 +70,9 @@ ingress_port = 0
 # Topology API — set to 15003 to serve as a seed node, 0 to disable
 topology_api_port = 0
 
-# Topology bootstrap — fetch initial peer list from existing seed nodes
+# Topology bootstrap — fetch initial peer list from the Hisoka seed service
 bootstrap_topology_urls = [
-    "http://3.236.170.102:15003/topology",
-    "http://100.56.12.65:15003/topology"
+    "https://api.hisoka.io/seed/topology"
 ]
 
 # --- Relay Pipeline ---
@@ -91,22 +89,22 @@ response_prune_interval_secs = 60
 [http]
 # SSRF protection — NEVER set allow_private_ips = true in production
 allow_private_ips = false
-request_timeout_secs = 10
-max_response_bytes = 1048576    # 1 MB max response body
+request_timeout_secs = 120
+max_response_bytes = 134217728  # 128 MB max response body
 
 # --- [network] P2P Settings ---
 
 [network]
 max_connections = 500
-max_connections_per_peer = 2
+max_connections_per_peer = 10
 ping_interval_secs = 15
 idle_connection_timeout_secs = 3600
 
 [network.rate_limit]
-burst_unknown = 50
-rate_unknown = 100
-burst_trusted = 100
-rate_trusted = 200
+burst_unknown = 500
+rate_unknown = 1000
+burst_trusted = 1000
+rate_trusted = 2000
 
 # --- [relayer] Sphinx Relay Pipeline ---
 
@@ -122,3 +120,13 @@ bloom_capacity = 100000
 [relayer.fragmentation]
 timeout_seconds = 300
 prune_interval_seconds = 60
+
+# --- Token Registry (Profitability Engine) ---
+# Maps testnet token addresses to oracle price IDs.
+# Required for exit nodes to calculate profitability of gas-paid transactions.
+
+[[tokens]]
+address = "0x50716a09f40cB9c1eA7aCA86255bAf02513B0238"
+symbol = "NOX-STK"
+decimals = 18
+price_id = "usd-coin"
