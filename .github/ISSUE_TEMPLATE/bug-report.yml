@@ -7,8 +7,8 @@ body:
     id: version
     attributes:
       label: NOX Version
-      description: "Run `docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet --version` or check X-Nox-Version header"
-      placeholder: "0.2.0-testnet"
+      description: "Run `docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet --version` or check X-Nox-Version header"
+      placeholder: "0.2.2-testnet"
     validations:
       required: true
 
