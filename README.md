@@ -2,7 +2,7 @@
 
 Run a [NOX](https://github.com/hisoka-io/nox) mixnet node on [Hisoka Protocol](https://hisoka.io). NOX is a 3-layer Sphinx mixnet that provides network-layer privacy for on-chain transactions on Ethereum.
 
-`v0.2.0-testnet` | Arbitrum Sepolia | `ghcr.io/hisoka-io/nox:0.2.0-testnet`
+`v0.2.2-testnet` | Arbitrum Sepolia | `ghcr.io/hisoka-io/nox:0.2.2-testnet`
 
 ## Prerequisites
 
@@ -17,10 +17,10 @@ Run a [NOX](https://github.com/hisoka-io/nox) mixnet node on [Hisoka Protocol](h
 
 ```bash
 # Pull the image
-docker pull ghcr.io/hisoka-io/nox:0.2.0-testnet
+docker pull ghcr.io/hisoka-io/nox:0.2.2-testnet
 
 # Generate keys
-docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen > .env
+docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen > .env
 
 # Clone and configure
 git clone https://github.com/hisoka-io/run-nox.git && cd run-nox
@@ -44,8 +44,8 @@ Exit nodes are the final mixnet hop. They decrypt the innermost Sphinx layer, ex
 ### Quick Start
 
 ```bash
-docker pull ghcr.io/hisoka-io/nox:0.2.0-testnet
-docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen > .env
+docker pull ghcr.io/hisoka-io/nox:0.2.2-testnet
+docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen > .env
 
 git clone https://github.com/hisoka-io/run-nox.git && cd run-nox
 cp configs/exit.toml config.toml
@@ -109,7 +109,7 @@ curl http://localhost:15004/health
 ## Key Generation
 
 ```bash
-docker run --rm ghcr.io/hisoka-io/nox:0.2.0-testnet keygen
+docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen
 ```
 
 Outputs:
