@@ -23,16 +23,16 @@ node_role = "relay"
 # Price oracle sidecar (runs alongside nox via docker-compose)
 oracle_url = "http://127.0.0.1:15004"
 
-# --- Contract Addresses (Arbitrum Sepolia, deployed 2026-03-17) ---
+# --- Contract Addresses (Arbitrum Sepolia, deployed 2026-04-03) ---
 
 # NoxRegistry: node registration, topology, staking
-registry_contract_address = "0x5e00d71a66804f58dAd2dFa6dA6857F6B1F1F4F2"
+registry_contract_address = "0x8626aF80db409BeD3C19871FAdf9b0Ce7Aa641Bc"
 
 # RelayerMulticall: not needed for relay nodes, but included for completeness
-relayer_multicall_address = "0xCc09Fe53bC36c0F34996A6AD3088E937Ef44C94E"
+relayer_multicall_address = "0xe626Cfc690408Cc6d4b5eE202dDE1C411223e6AE"
 
 # NoxRewardPool: not needed for relay nodes, but included for completeness
-nox_reward_pool_address = "0x89277aD4519d62AC9C26E431eb6236C30C893956"
+nox_reward_pool_address = "0x1D336Fd873178a41333Ec7B50Be0fF52A5F69E1d"
 
 # --- Keys (loaded from .env via environment variables) ---
 # Generate: docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen > .env
