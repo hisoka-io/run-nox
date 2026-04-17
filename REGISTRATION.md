@@ -8,7 +8,7 @@ NOX nodes must be registered on-chain in the NoxRegistry contract to join the mi
 git clone https://github.com/hisoka-io/run-nox.git && cd run-nox
 
 # Generate keys (save this output, private keys can't be recovered)
-docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen | tee .env
+docker run --rm ghcr.io/hisoka-io/nox:0.1.0 keygen | tee .env
 
 # Pick a config template
 cp configs/relay.toml config.toml   # or configs/exit.toml
