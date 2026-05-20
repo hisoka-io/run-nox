@@ -189,11 +189,11 @@ NOX__RELAYER__MIX_DELAY_MS=500.0
 
 | Contract | Address |
 |----------|---------|
-| DarkPool | `0xd1CDd9474b5Caf67F95F871503E5774Fd6aD0F16` |
-| NoxRegistry | `0x5e00d71a66804f58dAd2dFa6dA6857F6B1F1F4F2` |
-| NoxRewardPool | `0x89277aD4519d62AC9C26E431eb6236C30C893956` |
-| StakingToken | `0x50716a09f40cB9c1eA7aCA86255bAf02513B0238` |
-| RelayerMulticall | `0xCc09Fe53bC36c0F34996A6AD3088E937Ef44C94E` |
+| DarkPool | `0x7A3B2A44559A4b66cCA2E207cd8aDE5b23BE6b7B` |
+| NoxRegistry | `0x8626aF80db409BeD3C19871FAdf9b0Ce7Aa641Bc` |
+| NoxRewardPool | `0x1D336Fd873178a41333Ec7B50Be0fF52A5F69E1d` |
+| StakingToken | `0x208be235AAB9b8b5d86285b2684c8e6743e662b5` |
+| RelayerMulticall | `0xe626Cfc690408Cc6d4b5eE202dDE1C411223e6AE` |
 
 Config fields: `registry_contract_address`, `relayer_multicall_address`, `nox_reward_pool_address`
 
