@@ -39,6 +39,24 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: ingress_url
+    attributes:
+      label: Ingress URL
+      description: "Required by the registry contract. Entry nodes only need a real value (e.g., https://nox-N.hisoka.io). Relay and exit nodes can leave this empty or use http://YOUR_PUBLIC_IP:15002."
+      placeholder: "https://your-node.example.com"
+    validations:
+      required: false
+
+  - type: input
+    id: metadata_url
+    attributes:
+      label: Metadata URL
+      description: "Optional URL pointing at a JSON document with extra node info. Leave empty if you do not host one."
+      placeholder: ""
+    validations:
+      required: false
+
   - type: dropdown
     id: role
     attributes:
