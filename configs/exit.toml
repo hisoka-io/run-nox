@@ -1,7 +1,6 @@
-# NOX Exit Node Configuration -Arbitrum Sepolia Testnet
-# Version: v0.2.2-testnet
+# NOX Exit Node Configuration - Arbitrum Sepolia
 #
-# Exit nodes execute on-chain transactions (ZK proof submission, swaps, etc.)
+# Exit nodes execute protocol-neutral paid transactions.
 # They require an ETH wallet funded with gas and a price oracle for profitability.
 #
 # Setup:
@@ -25,19 +24,19 @@ node_role = "exit"
 # Required for exit nodes -used for gas profitability calculations
 oracle_url = "http://127.0.0.1:15004"
 
-# --- Contract Addresses (Arbitrum Sepolia, deployed 2026-04-03) ---
+# --- Contract Addresses ---
 
 # NoxRegistry: node registration, topology, staking
-registry_contract_address = "0x8626aF80db409BeD3C19871FAdf9b0Ce7Aa641Bc"
+registry_contract_address = "0x0000000000000000000000000000000000000000"
 
-# RelayerMulticall: batched TX execution (payment + action)
-relayer_multicall_address = "0xe626Cfc690408Cc6d4b5eE202dDE1C411223e6AE"
+# Set from the committed paid-execution deployment.
+nox_reward_pool_address = "0x0000000000000000000000000000000000000000"
 
-# NoxRewardPool: ZK gas payment validation and reward deposit
-nox_reward_pool_address = "0x1D336Fd873178a41333Ec7B50Be0fF52A5F69E1d"
+# Set from the committed paid-execution deployment before running an exit.
+nox_entry_point_address = "0x0000000000000000000000000000000000000000"
 
 # --- Keys (loaded from .env via environment variables) ---
-# Generate: docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen > .env
+# Generate with the same immutable image digest used by Docker Compose.
 routing_private_key = ""
 p2p_private_key = ""
 eth_wallet_private_key = ""
@@ -51,6 +50,22 @@ min_gas_balance = "10000000000000000"
 # Minimum profit margin (%) to execute a transaction.
 # If gas_cost * 1.10 > revenue, the TX is dropped as unprofitable.
 min_profit_margin_percent = 10
+oracle_cache_ttl_secs = 10
+oracle_max_observation_age_secs = 300
+oracle_max_future_skew_secs = 30
+native_asset_price_id = "ethereum"
+native_asset_decimals = 18
+gas_limit_buffer_bps = 2000
+initial_fee_buffer_bps = 2000
+replacement_step_bps = 2000
+chain_data_fee_mode = "rpc_gas_estimate_includes_data_fee"
+quote_ttl_secs = 30
+quote_network_fee_bps = 500
+quote_maximum_transaction_gas = 12000000
+quote_max_outstanding = 256
+quote_max_pending_sponsored_gas = 500000000
+quote_rolling_loss_limit_native = "100000000000000000"
+quote_rolling_loss_window_secs = 3600
 
 # --- Networking ---
 
@@ -79,8 +94,9 @@ bootstrap_topology_urls = [
 
 min_pow_difficulty = 3
 db_path = "/var/lib/nox/data/db"
+benchmark_mode = false
 block_poll_interval_secs = 5
-chain_start_block = 251066390
+chain_start_block = 0
 max_broadcast_tx_size = 262144
 response_prune_interval_secs = 60
 
@@ -123,10 +139,15 @@ prune_interval_seconds = 60
 
 # --- Token Registry (Profitability Engine) ---
 # Maps testnet token addresses to oracle price IDs.
-# Required for exit nodes to calculate profitability of gas-paid transactions.
+# Required for exit nodes to calculate paid-transaction profitability.
 
 [[tokens]]
-address = "0x50716a09f40cB9c1eA7aCA86255bAf02513B0238"
-symbol = "NOX-STK"
-decimals = 18
-price_id = "usd-coin"
+address = "0x0000000000000000000000000000000000000000"
+symbol = ""
+decimals = 0
+price_id = ""
+
+[[payment_adapters]]
+address = "0x0000000000000000000000000000000000000000"
+fee_assets = ["0x0000000000000000000000000000000000000000"]
+maximum_payment_gas = 4000000
