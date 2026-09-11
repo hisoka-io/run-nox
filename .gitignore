@@ -1,0 +1,4 @@
+.env
+config.toml
+deployment.json
+__pycache__/

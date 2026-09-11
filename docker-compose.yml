@@ -1,22 +1,74 @@
-# NOX Mixnet Node -Docker Compose
+# NOX Mixnet Node - Docker Compose
 # Docs: https://github.com/hisoka-io/run-nox
 #
 # Quick start:
-#   1. docker pull ghcr.io/hisoka-io/nox:0.2.2-testnet
-#   2. docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen > .env
-#   3. cp configs/relay.toml config.toml   # or configs/exit.toml
-#   4. docker compose up -d
+#   1. Export NOX_IMAGE and NOX_PREFLIGHT_IMAGE from the signed release record.
+#   2. Copy the signed deployment record to ./deployment.json.
+#   3. docker run --rm "$NOX_IMAGE" keygen > .env
+#   4. cp configs/relay.toml config.toml   # or configs/exit.toml
+#   5. docker compose up -d
 
 services:
+  preflight:
+    image: ${NOX_PREFLIGHT_IMAGE:?NOX_PREFLIGHT_IMAGE must be the immutable preflight digest in deployment.json}
+    container_name: nox-preflight
+    user: "65532:65532"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: host
+    volumes:
+      - type: bind
+        source: ./config.toml
+        target: /etc/nox/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./deployment.json
+        target: /etc/nox-release/deployment.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts/preflight_config.py
+        target: /opt/nox/preflight_config.py
+        read_only: true
+        bind:
+          create_host_path: false
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+    entrypoint: ["python3", "/opt/nox/preflight_config.py"]
+    command:
+      - auto
+      - /etc/nox/config.toml
+      - /etc/nox-release/deployment.json
+      - ${NOX_IMAGE:?NOX_IMAGE must be the immutable Nox digest in deployment.json}
+      - ${NOX_PREFLIGHT_IMAGE:?NOX_PREFLIGHT_IMAGE must be the immutable preflight digest in deployment.json}
+    restart: "no"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
   price-server:
-    image: ghcr.io/hisoka-io/nox:0.2.2-testnet
+    image: ${NOX_IMAGE:?NOX_IMAGE must be an immutable ghcr.io/hisoka-io/nox digest}
     container_name: nox-price-server
+    user: "10001:10001"
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
     entrypoint: ["price_server"]
     environment:
       - PRICE_SERVER_PORT=15004
       - PRICE_SERVER_BIND=0.0.0.0
       - RUST_LOG=info
     network_mode: host
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -31,11 +83,19 @@ services:
       start_period: 30s
 
   nox:
-    image: ghcr.io/hisoka-io/nox:0.2.2-testnet
+    image: ${NOX_IMAGE:?NOX_IMAGE must be an immutable ghcr.io/hisoka-io/nox digest}
     container_name: nox-node
+    user: "10001:10001"
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
     network_mode: host
     volumes:
-      - ./config.toml:/etc/nox/config.toml:ro
+      - type: bind
+        source: ./config.toml
+        target: /etc/nox/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
       - nox-identity:/var/lib/nox/identity
       - nox-data:/var/lib/nox/data
       - nox-logs:/var/lib/nox/logs
@@ -45,6 +105,8 @@ services:
       - RUST_LOG=info
       - NOX_LOG_DIR=/var/lib/nox/logs
     depends_on:
+      preflight:
+        condition: service_completed_successfully
       price-server:
         condition: service_healthy
     restart: unless-stopped
@@ -61,6 +123,6 @@ services:
       start_period: 30s
 
 volumes:
-  nox-identity:   # P2P identity key -persists across upgrades
-  nox-data:       # Sled database -persists across upgrades
-  nox-logs:       # Per-level log files (debug, info, warn, error)
+  nox-identity:
+  nox-data:
+  nox-logs:

@@ -1,5 +1,4 @@
-# NOX Relay Node Configuration -Arbitrum Sepolia Testnet
-# Version: v0.2.2-testnet
+# NOX Relay Node Configuration - Arbitrum Sepolia
 #
 # Relay nodes forward Sphinx packets through the mixnet.
 # They do NOT execute on-chain transactions and do NOT need an ETH wallet.
@@ -20,22 +19,20 @@ chain_id = 421614
 # Node role: "relay" = entry/mix forwarding only (no wallet, no TX execution)
 node_role = "relay"
 
-# Price oracle sidecar (runs alongside nox via docker-compose)
-oracle_url = "http://127.0.0.1:15004"
+# Relay nodes do not consume prices.
+oracle_url = ""
 
-# --- Contract Addresses (Arbitrum Sepolia, deployed 2026-04-03) ---
+# --- Contract Addresses ---
 
 # NoxRegistry: node registration, topology, staking
-registry_contract_address = "0x8626aF80db409BeD3C19871FAdf9b0Ce7Aa641Bc"
+registry_contract_address = "0x0000000000000000000000000000000000000000"
 
-# RelayerMulticall: not needed for relay nodes, but included for completeness
-relayer_multicall_address = "0xe626Cfc690408Cc6d4b5eE202dDE1C411223e6AE"
-
-# NoxRewardPool: not needed for relay nodes, but included for completeness
-nox_reward_pool_address = "0x1D336Fd873178a41333Ec7B50Be0fF52A5F69E1d"
+# Paid-execution contracts are unused by relay-only nodes.
+nox_reward_pool_address = "0x0000000000000000000000000000000000000000"
+nox_entry_point_address = "0x0000000000000000000000000000000000000000"
 
 # --- Keys (loaded from .env via environment variables) ---
-# Generate: docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen > .env
+# Generate with the same immutable image digest used by Docker Compose.
 routing_private_key = ""
 p2p_private_key = ""
 eth_wallet_private_key = ""
@@ -73,6 +70,7 @@ min_pow_difficulty = 3
 
 # Sled database path (inside Docker volume)
 db_path = "/var/lib/nox/data/db"
+benchmark_mode = false
 
 # Block polling interval (seconds). Arb Sepolia produces blocks every ~0.25s,
 # but 5s is fine for topology sync.
@@ -80,13 +78,27 @@ block_poll_interval_secs = 5
 
 # Start scanning from this block number (skip old history).
 # Set to a recent block to avoid scanning millions of empty blocks.
-chain_start_block = 251066390
+chain_start_block = 0
 
 # Max signed broadcast TX size (bytes). 256 KB for L2.
 max_broadcast_tx_size = 262144
 
 # SURB response buffer prune interval (seconds)
 response_prune_interval_secs = 60
+
+# --- Economics compatibility ---
+
+min_gas_balance = "10000000000000000"
+min_profit_margin_percent = 10
+oracle_cache_ttl_secs = 10
+oracle_max_observation_age_secs = 300
+oracle_max_future_skew_secs = 30
+native_asset_price_id = "ethereum"
+native_asset_decimals = 18
+gas_limit_buffer_bps = 2000
+initial_fee_buffer_bps = 2000
+replacement_step_bps = 2000
+chain_data_fee_mode = "rpc_gas_estimate_includes_data_fee"
 
 # --- [network] P2P Settings ---
 

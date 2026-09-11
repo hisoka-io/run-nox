@@ -1,74 +1,72 @@
 # Node Registration
 
-NOX nodes must be registered on-chain in the NoxRegistry contract to join the mixnet. During testnet, registration is handled by the Hisoka team.
+NOX nodes must be registered in the current Arbitrum Sepolia `NoxRegistry` before they join the mixnet. Its
+address comes from the committed operator deployment manifest. Historical registry addresses are not compatible
+with the current complete topology profile verification. Testnet registrations are reviewed by the Hisoka team.
 
-## 1. Generate Keys and Start
+## 1. Generate Keys
+
+Copy the signed release record to `deployment.json` and export its exact `noxImage` and `preflightImage` values before generating keys:
 
 ```bash
-git clone https://github.com/hisoka-io/run-nox.git && cd run-nox
+git clone https://github.com/hisoka-io/run-nox.git
+cd run-nox
+cp /secure/path/to/signed-deployment.json deployment.json
+export NOX_IMAGE='ghcr.io/hisoka-io/nox@sha256:...'
+export NOX_PREFLIGHT_IMAGE='python@sha256:...'
+docker run --rm "$NOX_IMAGE" keygen > .env
+chmod 600 .env
+```
 
-# Generate keys (save this output, private keys can't be recovered)
-docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen | tee .env
+Store `.env` through the approved secret-management path. Do not attach it to a registration request or paste it into logs.
 
-# Pick a config template
-cp configs/relay.toml config.toml   # or configs/exit.toml
+## 2. Configure and Validate
 
+Start with the relay role unless you are an approved exit operator:
+
+```bash
+cp configs/relay.toml config.toml
+set -a
+. ./.env
+set +a
+scripts/preflight.sh relay config.toml "$NOX_IMAGE" deployment.json
 docker compose up -d
+curl --fail http://127.0.0.1:15001/topology
 ```
 
-First start takes about 60 seconds. The node will poll the chain for topology but won't find peers until registered.
+An exit operator must insert the committed `NoxEntryPoint` deployment address into a local copy of `configs/exit.toml`, fund the generated wallet, and pass `scripts/preflight.sh exit ... deployment.json` before starting. Compose will repeat this validation before it starts either service.
 
-## 2. Check It's Running
+## 3. Submit the Public Registration Values
+
+Open a [node registration request](https://github.com/hisoka-io/run-nox/issues/new?template=node-registration-request.yml) with only these public values:
+
+| Field | Source |
+|---|---|
+| Sphinx public key | The public-key line produced by `keygen` |
+| ETH address | The public address produced by `keygen` |
+| P2P multiaddr | `/ip4/YOUR_PUBLIC_IP/tcp/15000` |
+| Node role | `relay` or `exit` |
+| Peer ID | The public Peer ID produced by `keygen` or node startup logs |
+
+Never include a routing key, P2P private key, wallet private key, RPC credential, or complete `.env` file.
+
+## 4. Verify Registration
+
+A maintainer registers the node with `nox-ctl`. After approval, peers should appear in the topology response:
 
 ```bash
-curl http://localhost:15001/topology
-docker compose logs -f nox
+curl --fail --silent http://127.0.0.1:15001/topology | python3 -m json.tool
+docker compose logs --tail 100 nox
 ```
 
-You should see block polling and no peer connections yet.
+Confirm that TCP port `15000` is reachable from outside the host and that the registered multiaddr matches the public address.
 
-## 3. Request Registration
+## Exit Funding
 
-Open an issue: [Node Registration Request](https://github.com/hisoka-io/run-nox/issues/new?template=node-registration-request.yml)
+Exit nodes require Arbitrum Sepolia ETH for gas. Fund only the public wallet address emitted by the same key generation run. Monitor the configured minimum gas balance and replenish before it is reached.
 
-Provide:
+## Recovery
 
-| Field | Where |
-|-------|-------|
-| Sphinx Public Key | keygen output, `# Public key (for registration):` line |
-| ETH Address | keygen output, `# Address (for registration):` line |
-| P2P Multiaddr | `/ip4/YOUR_PUBLIC_IP/tcp/15000` |
-| Node Role | `relay` or `exit` |
-| PeerId (optional) | keygen output or `docker compose logs nox | grep PeerId` |
+If validation fails, rerun preflight and inspect the named field without printing `.env`. If peers remain absent after registration, verify the public multiaddr, firewall, RPC access, registry address, and scan start block.
 
-## 4. Wait for Approval
-
-A maintainer registers your node on-chain with `nox-ctl`. You'll get notified on the issue.
-
-## 5. Verify
-
-After registration, peers should appear within ~10 seconds:
-
-```bash
-curl -s http://localhost:15001/topology | python3 -m json.tool
-```
-
-## Funding Exit Nodes
-
-Exit nodes need ETH for gas on Arbitrum Sepolia:
-
-1. Get your ETH address from keygen output
-2. Faucet: https://faucet.quicknode.com/arbitrum/sepolia
-3. Send 0.1 ETH (lasts weeks on testnet)
-
-The node only submits if `revenue / gas_cost >= 1.10`. Adjust with `min_profit_margin_percent`.
-
-## Troubleshooting
-
-**No peers after registration:** Check port 15000 is reachable (`nc -zv YOUR_IP 15000`), verify multiaddr matches your IP, wait a minute.
-
-**Config validation failed:** Check `.env` exists next to docker-compose.yml. Run `grep NOX__ROUTING .env` to verify keys are set.
-
-**Can't connect to peers:** `sudo ufw allow 15000/tcp`, check `p2p_listen_addr = "0.0.0.0"`, check `network_mode: host` in docker-compose.
-
-**Won't start after role change:** `docker compose down -v && docker compose up -d`
+Do not delete Docker volumes during troubleshooting. The identity and data volumes are required for stable peer identity and safe transaction recovery.

@@ -1,363 +1,207 @@
 # Run NOX
 
-Run a [NOX](https://github.com/hisoka-io/nox) mixnet node on [Hisoka Protocol](https://hisoka.io). NOX is a 3-layer Sphinx mixnet that provides network-layer privacy for on-chain transactions on Ethereum.
+This repository is the canonical operator kit for a [NOX](https://github.com/hisoka-io/nox) mixnet node on [Hisoka Protocol](https://hisoka.io). NOX provides network-layer privacy for protocol-neutral paid transactions on Arbitrum Sepolia.
 
-`v0.2.2-testnet` | Arbitrum Sepolia | `ghcr.io/hisoka-io/nox:0.2.2-testnet`
+## Requirements
 
-## Prerequisites
+- Docker Engine 20.10 or newer and Docker Compose v2
+- Python 3.11 or newer for TOML preflight validation
+- A public IPv4 address with TCP port `15000` open
+- An Arbitrum Sepolia RPC endpoint
+- A signed deployment record containing immutable Nox and preflight image digests
+- 1 vCPU and 1 GB RAM for relay nodes, or 2 vCPU and 2 GB RAM for exit nodes
 
-- Docker Engine 20.10+ and Docker Compose v2
-- 1 vCPU / 1 GB RAM minimum (2 vCPU / 2 GB for exit nodes)
-- Public IPv4 with TCP port `15000` open
-- Ethereum RPC endpoint (public Arbitrum Sepolia RPC works: `https://sepolia-rollup.arbitrum.io/rpc`)
+The node and price server use the same Nox digest. The preflight service uses its separately pinned digest. Do not deploy a mutable tag.
 
-> **Apple Silicon:** The image is `linux/amd64` only. Docker Desktop handles emulation via Rosetta. Add `--platform linux/amd64` if you see platform warnings.
+## Relay Quick Start
 
-## Quick Start
+Copy the signed release record to `deployment.json` and export its exact `noxImage` and `preflightImage` values:
 
 ```bash
-# Pull the image
-docker pull ghcr.io/hisoka-io/nox:0.2.2-testnet
-
-# Generate keys
-docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen > .env
-
-# Clone and configure
-git clone https://github.com/hisoka-io/run-nox.git && cd run-nox
+git clone https://github.com/hisoka-io/run-nox.git
+cd run-nox
+cp /secure/path/to/signed-deployment.json deployment.json
+export NOX_IMAGE='ghcr.io/hisoka-io/nox@sha256:...'
+export NOX_PREFLIGHT_IMAGE='python@sha256:...'
+docker run --rm "$NOX_IMAGE" keygen > .env
+chmod 600 .env
 cp configs/relay.toml config.toml
-
-# Start
+set -a
+. ./.env
+set +a
+scripts/preflight.sh relay config.toml "$NOX_IMAGE" deployment.json
 docker compose up -d
-
-# Verify
-curl http://localhost:15001/topology
+curl --fail http://127.0.0.1:15001/topology
 ```
 
-Your node won't find peers until it's registered on-chain. See [REGISTRATION.md](REGISTRATION.md).
-
-First startup takes about 60 seconds while the price server healthcheck passes.
+The generated secrets remain in `.env`. Do not print or paste that file into logs, issues, or shell history. Register the node after it starts by following [REGISTRATION.md](REGISTRATION.md). `docker compose up` runs the same preflight itself, so neither the node nor the price server starts if the manifest is absent, an image differs from the release record, or on-chain verification fails.
 
 ## Exit Nodes
 
-Exit nodes are the final mixnet hop. They decrypt the innermost Sphinx layer, extract the transaction payload, and submit it on-chain. They need an ETH wallet with gas and a price oracle.
+Exit nodes request and verify signed execution quotes, receive the corresponding paid transaction through the selected mixnet route, enforce configured-token and profitability policy, and submit the approved `NoxEntryPoint` call. The durable transaction outbox reconciles submissions and replacements after restart.
 
-### Quick Start
+An exit additionally requires:
+
+- A funded secp256k1 wallet in `NOX__ETH_WALLET_PRIVATE_KEY`
+- The committed paid-execution `NoxEntryPoint` address in `nox_entry_point_address`
+- The committed paid-execution deployment manifest
+- A price source for every configured fee asset
+- An RPC endpoint that supports the configured simulation and fee-estimation policy
+
+The checked-in exit template deliberately uses zero addresses for `nox_entry_point_address` and the payment
+adapter. Exit preflight remains closed until the paid-execution deployment record supplies both addresses.
+
+After inserting the committed EntryPoint, RewardPool, adapter, and fee-asset values into a local `config.toml`:
 
 ```bash
-docker pull ghcr.io/hisoka-io/nox:0.2.2-testnet
-docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen > .env
-
-git clone https://github.com/hisoka-io/run-nox.git && cd run-nox
 cp configs/exit.toml config.toml
-
-# Fund your wallet: get address from .env, send 0.1 ETH on Arb Sepolia
-# Faucet: https://faucet.quicknode.com/arbitrum/sepolia
-
+set -a
+. ./.env
+set +a
+scripts/preflight.sh exit config.toml "$NOX_IMAGE" deployment.json
 docker compose up -d
+curl --fail http://127.0.0.1:15004/health
+curl --fail http://127.0.0.1:15001/topology
 ```
 
-### How It Works
+Never expose the price server or admin port publicly. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
 
-1. Receive Sphinx packets from mix nodes via P2P
-2. Decrypt the final layer using the X25519 routing key
-3. Extract the `RelayerPayload` (multicall bundle: ZK proof + DeFi action)
-4. Simulate via `eth_simulateV1`
-5. Check profitability (gas cost vs fee revenue)
-6. Submit on-chain if profitable via `RelayerMulticall.multicall()`
-7. Return result to client via SURB through the mixnet
+## Target Network Configuration
 
-### Requirements
+The checked-in templates target Arbitrum Sepolia:
 
-| | Details |
-|-|---------|
-| **ETH wallet** | secp256k1 key in `.env` (`NOX__ETH_WALLET_PRIVATE_KEY`) |
-| **Gas** | ~0.1 ETH on Arb Sepolia lasts weeks |
-| **Price oracle** | Runs as docker-compose sidecar on port 15004 |
-| **RPC** | Must support `eth_simulateV1` or `debug_traceCall` |
-| **Contracts** | `registry_contract_address`, `relayer_multicall_address`, `nox_reward_pool_address` |
-| **Config** | `node_role = "exit"` and `oracle_url = "http://127.0.0.1:15004"` |
+| Setting | Value |
+|---|---|
+| Chain ID | `421614` |
+| Benchmark mode | `false` |
+| Native price asset | `ethereum`, 18 decimals |
 
-### Profitability
+The checked-in deployment template leaves the registry and paid-execution addresses, registry start block,
+runtime-code hashes, proxy implementation slots and hashes, fee-asset list, and image digests empty until the ABI-compatible contracts are deployed. Copy the signed release record to the ignored `deployment.json` path before Compose startup. Both role templates
+therefore fail preflight by design. Preflight compares the role config and both runtime image digests to that record, verifies the configured
+RPC chain, checks every recorded runtime `codeHash` through `eth_getProof`, verifies each proxy implementation,
+checks EntryPoint, sandbox, adapter, BundleExecutor, RewardPool role and asset wiring, and compares token
+`decimals()` on chain. Do not infer or substitute an address or price mapping.
 
-Exit nodes only submit transactions that are profitable:
+The historical Arbitrum Sepolia registry exposes an older profile ABI and is not compatible with the current
+complete topology verification. Registry, indexer, SDK, node image, and operator manifest must roll out as one
+audited release.
 
-```
-Revenue = fee_amount * token_price_usd / 10^decimals
-Gas Cost = gas_used * gas_price * eth_price_usd / 10^18
-Margin  = Revenue / Gas Cost
+The indexer must use the same registry address and exact nonzero deployment start block from the manifest. Its
+`/seed/topology` endpoint returns 503 until replayed membership proves the registry count and fingerprint at a
+single processed block. Do not substitute persisted database rows for this proof.
 
->= 1.10 -> SUBMIT
-<  1.10 -> DROP
-```
-
-Adjust with `min_profit_margin_percent` (default 10%). "Unprofitable TX dropped" in logs is normal.
-
-### Monitoring
-
-```bash
-cast balance YOUR_ETH_ADDRESS --rpc-url https://sepolia-rollup.arbitrum.io/rpc
-docker compose logs nox | grep -i "submit\|confirm\|revert\|profitab"
-curl http://localhost:15004/health
-```
-
-### Security
-
-- SSRF protection on by default (`allow_private_ips = false`)
-- Private keys never logged, zeroized on drop
-- Your ETH address is registered on-chain and visible to the network
-
-## Key Generation
-
-```bash
-docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet keygen
-```
-
-Outputs:
-```
-NOX__ROUTING_PRIVATE_KEY=a573f439...c3d832b6
-# Public key (for registration): 509a3761...95acd317
-
-NOX__P2P_PRIVATE_KEY=89f3438a...fcc3f8fa
-# PeerId (for registration): 12D3KooWELRY...
-
-NOX__ETH_WALLET_PRIVATE_KEY=396fdae4...ffd6c384
-# Address (for registration): 0xb192f9ed...
-```
-
-| Key | Algorithm | Purpose |
-|-----|-----------|---------|
-| Routing Key | X25519 | Sphinx packet encryption per hop |
-| P2P Key | Ed25519 | libp2p identity |
-| ETH Wallet Key | secp256k1 | Signs on-chain transactions (exit nodes) |
-
-Fallback without Docker: `bash scripts/generate-keys.sh > .env` (generates private keys only, no public key derivation).
-
-## Node Roles
-
-| Role | What It Does | Requires |
-|------|-------------|----------|
-| `relay` | Forwards Sphinx packets. Entry nodes accept client packets, mix nodes add latency. | Routing key, P2P port |
-| `exit` | Submits on-chain transactions. Needs wallet and gas. | Routing key, P2P port, ETH wallet, gas |
-| `full` | Both relay and exit. Default. | Everything |
-
-Start as `relay` unless you have a reason to run an exit node.
-
-### Required Config by Role
-
-| Field | Relay | Exit |
-|-------|:-----:|:----:|
-| `eth_rpc_url` | Yes | Yes |
-| `chain_id` | Yes | Yes |
-| `routing_private_key` | Yes | Yes |
-| `registry_contract_address` | Yes | Yes |
-| `eth_wallet_private_key` | No | Yes |
-| `oracle_url` | No | Yes |
-| `relayer_multicall_address` | No | Yes |
-| `nox_reward_pool_address` | No | Yes |
+Relay nodes use zero paid-execution contract addresses and do not need an exit wallet or oracle. Exit nodes must have explicit, nonzero paid-execution addresses and pass preflight.
 
 ## Configuration
 
-Config loads in order (later overrides earlier):
+Copy one checked-in role template to `config.toml`. Environment variables with the `NOX__` prefix override TOML fields. Keep secrets in `.env`; keep public network and policy settings in `config.toml`.
 
-1. Built-in defaults
-2. TOML config file (`config.toml`)
-3. Environment variables (`NOX__` prefix)
+The preflight gate parses TOML by section and checks the role, release-pinned deployment manifest, Nox and preflight image equality, chain, registry, scan start, benchmark setting,
+oracle freshness policy, gas buffers, quote capacity and loss limits, payment adapters,
+configured fee assets, live contract relationships, data-fee mode, and the presence of role-specific key variables. It validates presence
+without displaying values.
 
-### Environment Variables
+Exit token entries are an allowlist. Each configured address must appear in the deployment record's `feeAssets`,
+match on-chain decimals, and have explicit symbol and oracle identifiers in operator config. An unconfigured token
+is rejected rather than priced with a fallback.
 
-Top-level: `NOX__FIELD_NAME`
-Nested: `NOX__SECTION__FIELD_NAME`
-
-```bash
-NOX__ETH_RPC_URL=https://...
-NOX__CHAIN_ID=421614
-NOX__NETWORK__MAX_CONNECTIONS=1000
-NOX__RELAYER__MIX_DELAY_MS=500.0
-```
-
-### Core
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `eth_rpc_url` | String | `http://127.0.0.1:8545` | Ethereum JSON-RPC. Reads NoxRegistry events (all nodes), submits TXs (exit nodes). |
-| `oracle_url` | String | `http://127.0.0.1:3000` | Price oracle URL. docker-compose runs `price_server` on 15004. |
-| `chain_id` | u64 | `0` | Chain ID. `421614` for Arbitrum Sepolia. |
-| `node_role` | String | `"full"` | `"relay"`, `"exit"`, or `"full"`. |
-| `benchmark_mode` | bool | `false` | Skip production validations. Never enable in production. |
-
-### Contracts (Arbitrum Sepolia)
-
-| Contract | Address |
-|----------|---------|
-| DarkPool | `0x7A3B2A44559A4b66cCA2E207cd8aDE5b23BE6b7B` |
-| NoxRegistry | `0x8626aF80db409BeD3C19871FAdf9b0Ce7Aa641Bc` |
-| NoxRewardPool | `0x1D336Fd873178a41333Ec7B50Be0fF52A5F69E1d` |
-| StakingToken | `0x208be235AAB9b8b5d86285b2684c8e6743e662b5` |
-| RelayerMulticall | `0xe626Cfc690408Cc6d4b5eE202dDE1C411223e6AE` |
-
-Config fields: `registry_contract_address`, `relayer_multicall_address`, `nox_reward_pool_address`
-
-### Keys
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `routing_private_key` | `""` | X25519 private key (hex). Required. |
-| `p2p_private_key` | `""` | Ed25519 seed (hex). Auto-generates if empty. |
-| `p2p_identity_path` | `./data/p2p_id.key` | Persists P2P identity. Docker: `/var/lib/nox/identity/p2p_id.key`. |
-| `eth_wallet_private_key` | `""` | secp256k1 key (hex). Required for exit nodes. |
-
-### Networking
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `p2p_port` | `9000` | libp2p port. Must be public. Testnet: `15000`. |
-| `p2p_listen_addr` | `0.0.0.0` | Bind address. |
-| `metrics_port` | `9090` | Admin/metrics, localhost only. Testnet: `15001`. |
-| `topology_api_port` | `0` | Public topology endpoint. `15003` for seed nodes. |
-| `ingress_port` | `0` | HTTP packet injection. `15002` for entry nodes. |
-| `bootstrap_topology_urls` | `[]` | Seed URLs. Default: `["https://api.hisoka.io/seed/topology"]`. |
-
-### Economics
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `min_gas_balance` | `"10000000000000000"` | Min ETH balance before warning (0.01 ETH). |
-| `min_profit_margin_percent` | `10` | Min profit margin for TX execution. |
-
-### Relay Pipeline
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `min_pow_difficulty` | `3` | PoW difficulty (0-63). |
-| `db_path` | `./data/nox_db` | Sled database. Docker: `/var/lib/nox/data/db`. |
-| `block_poll_interval_secs` | `12` | Block polling interval. `5` for Arb Sepolia. |
-| `chain_start_block` | `0` | Start scanning from this block. |
-| `max_broadcast_tx_size` | `131072` | Max broadcast TX size (bytes). `262144` for L2. |
-| `mix_delay_ms` | `500.0` | Poisson mixing delay (ms). Higher = more privacy, more latency. |
-| `cover_traffic_rate` | `0.05` | Loop cover packets/sec. |
-| `drop_traffic_rate` | `0.05` | Drop cover packets/sec. |
-| `replay_window` | `3600` | Replay tag TTL (seconds). |
-| `bloom_capacity` | `100000` | Bloom filter capacity per window. |
-
-### Network
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `max_connections` | `1000` | Max total P2P connections. |
-| `max_connections_per_peer` | `2` | Max substreams per peer. |
-| `ping_interval_secs` | `15` | Heartbeat interval. |
-| `idle_connection_timeout_secs` | `3600` | Close idle connections after this. |
-
-### Rate Limiting (`[network.rate_limit]`)
-
-Peers progress through tiers: unknown -> trusted (after 1hr good behavior) -> penalized (after 5 violations in 60s).
-
-| Field | Default |
-|-------|---------|
-| `burst_unknown` / `rate_unknown` | 50 / 100 |
-| `burst_trusted` / `rate_trusted` | 100 / 200 |
-| `burst_penalized` / `rate_penalized` | 10 / 25 |
-| `violations_before_disconnect` | 5 |
-| `trust_promotion_time_secs` | 3600 |
-
-### HTTP Proxy (`[http]`, exit nodes)
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `allow_private_ips` | `false` | Never enable in production (SSRF). |
-| `request_timeout_secs` | `10` | Proxied request timeout. |
-| `max_response_bytes` | `1048576` | Max response (1 MB). |
+The checked-in 12,000,000 transaction-gas ceiling covers the measured Howl EntryPoint plan of 10,273,982 gas
+after the configured 20% estimate buffer. Operators must remeasure every enabled payment adapter and action class,
+then price the full signed reservation. `quote_max_pending_sponsored_gas` remains the aggregate exposure limit,
+so it can reject a quote even when that quote is below the per-transaction ceiling.
 
 ## Ports
 
-| Port | Service | Required | Notes |
-|------|---------|----------|-------|
-| 15000 | libp2p P2P | Yes | Must be publicly reachable |
-| 15001 | Admin + metrics | No | Localhost only |
-| 15002 | HTTP ingress | Entry only | Clients send Sphinx packets here |
-| 15003 | Topology API | Seed only | Other nodes bootstrap from this |
-| 15004 | Price oracle | Internal | Sidecar, not exposed |
+| Port | Purpose | Exposure |
+|---|---|---|
+| `15000/tcp` | libp2p | Public |
+| `15001/tcp` | Admin and metrics | Local only |
+| `15002/tcp` | Client ingress | Entry nodes only |
+| `15003/tcp` | Topology API | Seed nodes only |
+| `15004/tcp` | Price server | Local only |
 
-### Firewall
-
-| Role | Open Ports |
-|------|-----------|
-| Mix-only relay | `15000/tcp` |
-| Entry node | `15000/tcp`, `15002/tcp` |
-| Seed node | `15000/tcp`, `15002/tcp`, `15003/tcp` |
-| Exit node | `15000/tcp` |
+## Health and Monitoring
 
 ```bash
-# Example: entry + seed node
-sudo ufw allow 15000/tcp
-sudo ufw allow 15002/tcp
-sudo ufw allow 15003/tcp
-```
-
-## Monitoring
-
-```bash
-# Topology
-curl -s http://localhost:15001/topology | python3 -m json.tool
-
-# Logs
-docker compose logs -f nox
+docker compose ps
 docker compose logs --tail 100 nox
-docker compose logs price-server
+docker compose logs --tail 100 price-server
+curl --fail http://127.0.0.1:15001/topology
+curl --fail http://127.0.0.1:15004/health
 ```
 
-Log level via `RUST_LOG` in docker-compose.yml: `error`, `warn`, `info` (default), `debug`, or per-crate like `nox_node=debug,info`.
+For exits, alert on wallet balance, stale-price and unsupported-token rejections, rejected profitability decisions, submission ambiguity, replacement exhaustion, and unreconciled outbox records. Preserve the outbox volume across restarts and upgrades.
 
-## Funding Exit Nodes
+## Upgrade, Canary, and Rollback
 
-1. Get your ETH address from `nox keygen` output
-2. Get testnet ETH from the [Arbitrum Sepolia faucet](https://faucet.quicknode.com/arbitrum/sepolia)
-3. Send 0.1 ETH to your node's address
+Before upgrading:
 
-The profitability engine only submits transactions where revenue exceeds gas cost by at least 10% (configurable). Dropped transactions are logged but not an error.
+1. Record the current `NOX_IMAGE`, `NOX_PREFLIGHT_IMAGE`, manifest release record, and `docker compose ps` output.
+2. Verify both target digests against the signed release record, copy that exact record to `deployment.json`, and export the matching values.
+3. Stop one canary node cleanly and snapshot its `nox-data`, `nox-identity`, and `nox-logs` volumes using the host or cloud volume-snapshot facility. Record the three snapshot identifiers before continuing.
+4. Run the one-time ownership migration below while the node remains stopped.
+5. Run preflight against the unchanged role config, target Nox digest, and target manifest.
+6. Start the canary with `docker compose up -d` and verify topology, price health, peer recovery, and exit outbox reconciliation before continuing.
 
-## Upgrading
+Images after the cutover run as `nox` with fixed UID:GID `10001:10001`; Compose also drops every Linux
+capability and sets `no-new-privileges`. Existing AWS volumes were written by root. On each host, resolve the
+three exact Compose volume names with `docker volume ls`, inspect each target, then migrate only those explicit
+volumes after the snapshots exist:
 
 ```bash
-docker compose pull
-docker compose up -d
+export NOX_DATA_VOLUME=run-nox_nox-data
+export NOX_IDENTITY_VOLUME=run-nox_nox-identity
+export NOX_LOGS_VOLUME=run-nox_nox-logs
+
+for volume in "$NOX_DATA_VOLUME" "$NOX_IDENTITY_VOLUME" "$NOX_LOGS_VOLUME"; do
+  test -n "$volume"
+  docker volume inspect "$volume" >/dev/null
+done
+for volume in "$NOX_DATA_VOLUME" "$NOX_IDENTITY_VOLUME" "$NOX_LOGS_VOLUME"; do
+  docker run --rm --user 0:0 --entrypoint /bin/chown \
+    --volume "$volume:/mnt/nox-volume" \
+    "$NOX_IMAGE" -R 10001:10001 /mnt/nox-volume
+done
 ```
 
-Data persists in Docker volumes: `nox-identity` (P2P key), `nox-data` (database), `nox-logs`.
+Do not run this loop against an unresolved, empty, or newly created volume name. The live evidence before
+migration is root-owned volume roots and contents, with the Bloom file mode `0600`. Only the data, identity, and
+log volumes are migrated. `/etc/nox` remains `root:root` mode `0755` in the image, and `config.toml` remains a
+read-only bind mount. `/var/lib/nox` is `10001:10001` mode `0750`. The live config is mode `0644` and owned by
+UID 1000, so the runtime only needs read access. Do not chown the config or `/etc/nox`. After migration, verify
+all three writable mounts report numeric owner `10001:10001` from the target image before starting the canary.
 
-## Troubleshooting
+Promote relays first, then one exit, then the remaining exits. Keep the previous digest and snapshots until the observation window completes.
 
-| Symptom | Fix |
-|---------|-----|
-| Stuck after `docker compose up` | Normal, first start takes ~60s. Check `docker compose logs nox`. |
-| No peers found | Node not registered. See [REGISTRATION.md](REGISTRATION.md). |
-| `routing_private_key is empty` | `.env` missing or not in same dir as docker-compose.yml. |
-| Connection refused on 15000 | `sudo ufw allow 15000/tcp` |
-| Node restart loop | Check `docker compose logs nox` for config errors. |
-| Unprofitable TX dropped | Normal for exit nodes. Gas cost > fee revenue. |
-| Lagged(N) in logs | Temporary, recovers automatically. Increase `relayer.queue_size` if frequent. |
-| Empty topology | Check `eth_rpc_url` and `registry_contract_address`. |
-| Won't start after role change | `docker compose down -v && docker compose up -d` |
+To roll back, stop the affected node, restore the recorded `NOX_IMAGE`, `NOX_PREFLIGHT_IMAGE`, and matching `deployment.json`, then run `docker compose up -d`.
+The previous root-running image can use the `10001:10001` files, so ownership does not need to be reversed. Do
+not downgrade across an outbox schema change unless the release record explicitly declares backward
+compatibility. Restore the pre-upgrade volume snapshot when compatibility is not declared.
+
+Never delete the Docker volumes to resolve a startup or role-change failure. They contain the durable identity and transaction state required for safe recovery.
+
+## Security
+
+- Restrict `.env` to the node operator and back it up through the approved secret-management path.
+- Keep `allow_private_ips = false` on exits.
+- Use bounded token approvals and verify they return to zero in client workflows.
+- Do not enable `benchmark_mode` in an operator configuration.
+- Do not expose RPC credentials, private keys, raw signed payloads, or quote signatures in logs.
+- Use only committed contract addresses and immutable container digests.
 
 ## Architecture
 
-```
-Client -> [Entry Node] -> [Mix Node] -> [Exit Node] -> Ethereum
-              ^                              |
-              +------ SURB Response ---------+
+```text
+Client -> selected entry -> mix hops -> selected exit -> NoxEntryPoint -> Ethereum
+   ^                              |
+   +--------- SURB response ------+
 ```
 
-- **Entry nodes** accept client Sphinx packets via HTTP, inject into P2P mixnet
-- **Mix nodes** add Poisson-distributed delay to resist timing analysis
-- **Exit nodes** decrypt final layer, extract payload, execute on-chain
-- **SURBs** carry responses back through the mixnet
-- **Cover traffic** maintains constant rate regardless of real activity
-- **Reed-Solomon FEC** handles up to 30% packet loss on SURB responses
-- **PoW** prevents spam
+The client obtains a quote through one selected exit route, verifies the EIP-712 quote, and sends the paid transaction through that same route. A direct-IP quote request is not part of the operator flow because it would reveal the client-to-exit relationship.
 
 ## Links
 
 - [Hisoka Protocol](https://hisoka.io)
-- [GitHub](https://github.com/hisoka-io)
-- [Registration](REGISTRATION.md)
-- [Report a Bug](https://github.com/hisoka-io/run-nox/issues/new?template=bug-report.yml)
+- [Node registration](REGISTRATION.md)
+- [Issue tracker](https://github.com/hisoka-io/run-nox/issues)
