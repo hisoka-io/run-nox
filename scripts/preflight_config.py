@@ -39,6 +39,7 @@ REQUIRED_CONTRACTS = (
     "stakingToken",
 )
 PROXIES = ("darkPool", "noxRegistry", "noxRewardPool")
+USER_AGENT = "run-nox-preflight/1"
 
 
 def fail(message: str) -> NoReturn:
@@ -150,7 +151,9 @@ class Rpc:
         request = urllib.request.Request(
             self.url,
             data=body,
-            headers={"Content-Type": "application/json"},
+            # Cloudflare-fronted public RPCs (sepolia-rollup.arbitrum.io,
+            # publicnode) reject the default Python-urllib User-Agent (error 1010).
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
             method="POST",
         )
         try:

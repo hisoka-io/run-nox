@@ -60,10 +60,46 @@ if nox.count("create_host_path: false") != 1:
     raise SystemExit("nox can create an empty configuration path")
 PY
 
+python3 - "$repo_dir/configs" <<'PY'
+import json
+import sys
+import tomllib
+from pathlib import Path
+
+configs = Path(sys.argv[1])
+manifest = json.loads((configs / "arbitrum-sepolia.deployment.json").read_text(encoding="utf-8"))
+contracts = {name: value.lower() for name, value in manifest["contracts"].items()}
+fee_assets = {value.lower() for value in manifest["feeAssets"]}
+for role in ("relay", "exit"):
+    config = tomllib.loads((configs / f"{role}.toml").read_text(encoding="utf-8"))
+    expected = {
+        "chain_id": manifest["meta"]["chainId"],
+        "chain_start_block": manifest["meta"]["startBlock"],
+        "registry_contract_address": contracts["noxRegistry"],
+        "nox_reward_pool_address": contracts["noxRewardPool"],
+        "nox_entry_point_address": contracts["noxEntryPoint"],
+        "metrics_port": config.get("p2p_port", 0) + 1,
+    }
+    for field, value in expected.items():
+        actual = config.get(field)
+        if isinstance(actual, str):
+            actual = actual.lower()
+        if actual != value:
+            raise SystemExit(f"configs/{role}.toml {field} does not match the committed manifest")
+exit_config = tomllib.loads((configs / "exit.toml").read_text(encoding="utf-8"))
+if {token["address"].lower() for token in exit_config["tokens"]} != fee_assets:
+    raise SystemExit("configs/exit.toml tokens do not match the committed feeAssets")
+adapter = exit_config["payment_adapters"][0]
+if adapter["address"].lower() != contracts["howlPaymentAdapter"]:
+    raise SystemExit("configs/exit.toml payment adapter does not match the committed manifest")
+if {asset.lower() for asset in adapter["fee_assets"]} != fee_assets:
+    raise SystemExit("configs/exit.toml adapter fee_assets do not match the committed feeAssets")
+PY
+
 relay_config="$(mktemp)"
 sed \
-  -e 's/^registry_contract_address = "0x0000000000000000000000000000000000000000"/registry_contract_address = "0x5555555555555555555555555555555555555555"/' \
-  -e 's/^chain_start_block = 0/chain_start_block = 123/' \
+  -e 's/^registry_contract_address = .*/registry_contract_address = "0x5555555555555555555555555555555555555555"/' \
+  -e 's/^chain_start_block = .*/chain_start_block = 123/' \
   "$repo_dir/configs/relay.toml" >"$relay_config"
 relay_output="$("$repo_dir/scripts/preflight.sh" relay "$relay_config" "$image" "$deployment_fixture")"
 [[ "$relay_output" == *"preflight passed for relay"* ]]
@@ -90,18 +126,14 @@ if python3 "$repo_dir/scripts/preflight_config.py" auto "$relay_config" "$deploy
   exit 1
 fi
 
-if "$repo_dir/scripts/preflight.sh" exit "$repo_dir/configs/exit.toml" "$image" >/dev/null 2>&1; then
-  echo "exit preflight accepted an unset EntryPoint address" >&2
-  exit 1
-fi
-
 wrong_asset_config="$(mktemp)"
 exit_config="$(mktemp)"
 missing_quote_config="$(mktemp)"
 zero_adapter_config="$(mktemp)"
 bad_hash_manifest="$(mktemp)"
 bad_secret_config="$(mktemp)"
-trap 'rm -f "$bad_hash_manifest" "$bad_secret_config" "$exit_config" "$missing_quote_config" "$relay_config" "$wrong_asset_config" "$zero_adapter_config"' EXIT
+unset_entry_config="$(mktemp)"
+trap 'rm -f "$bad_hash_manifest" "$bad_secret_config" "$exit_config" "$missing_quote_config" "$relay_config" "$unset_entry_config" "$wrong_asset_config" "$zero_adapter_config"' EXIT
 
 sed '0,/0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d/s//0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' \
   "$deployment_fixture" >"$bad_hash_manifest"
@@ -117,12 +149,12 @@ if "$repo_dir/scripts/preflight.sh" relay "$bad_secret_config" "$image" "$deploy
   exit 1
 fi
 sed \
-  -e 's/^registry_contract_address = "0x0000000000000000000000000000000000000000"/registry_contract_address = "0x5555555555555555555555555555555555555555"/' \
-  -e 's/^chain_start_block = 0/chain_start_block = 123/' \
-  -e 's/^nox_reward_pool_address = "0x0000000000000000000000000000000000000000"/nox_reward_pool_address = "0x2222222222222222222222222222222222222222"/' \
-  -e 's/^nox_entry_point_address = "0x0000000000000000000000000000000000000000"/nox_entry_point_address = "0x1111111111111111111111111111111111111111"/' \
-  -e '/^\[\[tokens\]\]/,/^\[\[payment_adapters\]\]/ { s/^address = "0x0000000000000000000000000000000000000000"/address = "0x5555555555555555555555555555555555555555"/; s/^symbol = ""/symbol = "TEST"/; s/^decimals = 0/decimals = 18/; s/^price_id = ""/price_id = "usd-coin"/; }' \
-  -e '/^\[\[payment_adapters\]\]/,$ { s/^address = "0x0000000000000000000000000000000000000000"/address = "0x4444444444444444444444444444444444444444"/; s/^fee_assets = \["0x0000000000000000000000000000000000000000"\]/fee_assets = ["0x5555555555555555555555555555555555555555"]/; }' \
+  -e 's/^registry_contract_address = .*/registry_contract_address = "0x5555555555555555555555555555555555555555"/' \
+  -e 's/^chain_start_block = .*/chain_start_block = 123/' \
+  -e 's/^nox_reward_pool_address = .*/nox_reward_pool_address = "0x2222222222222222222222222222222222222222"/' \
+  -e 's/^nox_entry_point_address = .*/nox_entry_point_address = "0x1111111111111111111111111111111111111111"/' \
+  -e '/^\[\[tokens\]\]/,/^\[\[payment_adapters\]\]/ { s/^address = .*/address = "0x5555555555555555555555555555555555555555"/; s/^symbol = .*/symbol = "TEST"/; s/^decimals = .*/decimals = 18/; s/^price_id = .*/price_id = "usd-coin"/; }' \
+  -e '/^\[\[payment_adapters\]\]/,$ { s/^address = .*/address = "0x4444444444444444444444444444444444444444"/; s/^fee_assets = .*/fee_assets = ["0x5555555555555555555555555555555555555555"]/; }' \
   "$repo_dir/configs/exit.toml" >"$wrong_asset_config"
 if "$repo_dir/scripts/preflight.sh" exit "$wrong_asset_config" "$image" "$deployment_fixture" >/dev/null 2>&1; then
   echo "exit preflight accepted an unverified fee asset" >&2
@@ -130,17 +162,24 @@ if "$repo_dir/scripts/preflight.sh" exit "$wrong_asset_config" "$image" "$deploy
 fi
 
 sed \
-  -e 's/^registry_contract_address = "0x0000000000000000000000000000000000000000"/registry_contract_address = "0x5555555555555555555555555555555555555555"/' \
-  -e 's/^chain_start_block = 0/chain_start_block = 123/' \
-  -e 's/^nox_reward_pool_address = "0x0000000000000000000000000000000000000000"/nox_reward_pool_address = "0x2222222222222222222222222222222222222222"/' \
-  -e 's/^nox_entry_point_address = "0x0000000000000000000000000000000000000000"/nox_entry_point_address = "0x1111111111111111111111111111111111111111"/' \
-  -e '/^\[\[tokens\]\]/,/^\[\[payment_adapters\]\]/ { s/^address = "0x0000000000000000000000000000000000000000"/address = "0x3333333333333333333333333333333333333333"/; s/^symbol = ""/symbol = "TEST"/; s/^decimals = 0/decimals = 18/; s/^price_id = ""/price_id = "usd-coin"/; }' \
-  -e '/^\[\[payment_adapters\]\]/,$ { s/^address = "0x0000000000000000000000000000000000000000"/address = "0x4444444444444444444444444444444444444444"/; s/^fee_assets = \["0x0000000000000000000000000000000000000000"\]/fee_assets = ["0x3333333333333333333333333333333333333333"]/; }' \
+  -e 's/^registry_contract_address = .*/registry_contract_address = "0x5555555555555555555555555555555555555555"/' \
+  -e 's/^chain_start_block = .*/chain_start_block = 123/' \
+  -e 's/^nox_reward_pool_address = .*/nox_reward_pool_address = "0x2222222222222222222222222222222222222222"/' \
+  -e 's/^nox_entry_point_address = .*/nox_entry_point_address = "0x1111111111111111111111111111111111111111"/' \
+  -e '/^\[\[tokens\]\]/,/^\[\[payment_adapters\]\]/ { s/^address = .*/address = "0x3333333333333333333333333333333333333333"/; s/^symbol = .*/symbol = "TEST"/; s/^decimals = .*/decimals = 18/; s/^price_id = .*/price_id = "usd-coin"/; }' \
+  -e '/^\[\[payment_adapters\]\]/,$ { s/^address = .*/address = "0x4444444444444444444444444444444444444444"/; s/^fee_assets = .*/fee_assets = ["0x3333333333333333333333333333333333333333"]/; }' \
   "$repo_dir/configs/exit.toml" >"$exit_config"
 exit_output="$("$repo_dir/scripts/preflight.sh" exit "$exit_config" "$image" "$deployment_fixture")"
 [[ "$exit_output" == *"preflight passed for exit"* ]]
 [[ "$exit_output" != *"$NOX__ETH_WALLET_PRIVATE_KEY"* ]]
 grep -q '^quote_maximum_transaction_gas = 12000000$' "$exit_config"
+
+sed 's/^nox_entry_point_address = .*/nox_entry_point_address = "0x0000000000000000000000000000000000000000"/' \
+  "$exit_config" >"$unset_entry_config"
+if "$repo_dir/scripts/preflight.sh" exit "$unset_entry_config" "$image" "$deployment_fixture" >/dev/null 2>&1; then
+  echo "exit preflight accepted an unset EntryPoint address" >&2
+  exit 1
+fi
 
 valid_eth_key="$NOX__ETH_WALLET_PRIVATE_KEY"
 NOX__ETH_WALLET_PRIVATE_KEY="$(printf 'ff%.0s' {1..32})"
