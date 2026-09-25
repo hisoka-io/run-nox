@@ -6,23 +6,46 @@ This repository is the canonical operator kit for a [NOX](https://github.com/his
 
 - Docker Engine 20.10 or newer and Docker Compose v2
 - Python 3.11 or newer for TOML preflight validation
-- A public IPv4 address with TCP port `15000` open
-- An Arbitrum Sepolia RPC endpoint
-- A signed deployment record containing immutable Nox and preflight image digests
+- A public IPv4 address with TCP ports `15000` (libp2p) and `15001` (metrics, read-only) open
+- An Arbitrum Sepolia RPC endpoint. Exits need one that serves `eth_simulateV1`, such as
+  `https://arbitrum-sepolia-rpc.publicnode.com`
+- The committed deployment manifest, [`configs/arbitrum-sepolia.deployment.json`](configs/arbitrum-sepolia.deployment.json),
+  which pins the Nox and preflight image digests
 - 1 vCPU and 1 GB RAM for relay nodes, or 2 vCPU and 2 GB RAM for exit nodes
 
 The node and price server use the same Nox digest. The preflight service uses its separately pinned digest. Do not deploy a mutable tag.
 
+## Current Deployment
+
+The network moved to a new contract set on 2026-09-25. The April 2026 registry
+`0x8626aF80db409BeD3C19871FAdf9b0Ce7Aa641Bc` is **retired**. Nodes still configured for it are not part of the
+mixnet.
+
+| Item | Value |
+|---|---|
+| Chain | Arbitrum Sepolia (`421614`) |
+| `NoxRegistry` (proxy) | `0xF7BFf88A1412054a001Dc4b8aCBddAd6F9b26cB6` |
+| `NoxRewardPool` (proxy) | `0xA487BAa4f2C3fAA01C70066EE88b6F7fD6f1361D` |
+| `NoxEntryPoint` | `0xad911Ca217C6dC779fCE6A6538bDda3071c38E7E` |
+| `HowlPaymentAdapter` | `0xfC874B702F8D59B60B35582855505F4f60cE766D` |
+| SOKA (staking and fee asset, 18 decimals) | `0x0F69cf1c9F4FF72471701036dd789c934458e630` |
+| `chain_start_block` | `312414608` |
+| Nox image | `ghcr.io/hisoka-io/nox@sha256:3913b441f4ccd5e0f21b804af3845d8201326025b75c5f16c5407ed50ea4f31c` (`0.4.0-rc.1`) |
+| Preflight image | `python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9` |
+
+The role templates in `configs/` already carry these values. The manifest is the source of truth: preflight
+refuses to start a node whose config or images differ from it.
+
 ## Relay Quick Start
 
-Copy the signed release record to `deployment.json` and export its exact `noxImage` and `preflightImage` values:
+Copy the committed manifest to `deployment.json` and export its exact `noxImage` and `preflightImage` values:
 
 ```bash
 git clone https://github.com/hisoka-io/run-nox.git
 cd run-nox
-cp /secure/path/to/signed-deployment.json deployment.json
-export NOX_IMAGE='ghcr.io/hisoka-io/nox@sha256:...'
-export NOX_PREFLIGHT_IMAGE='python@sha256:...'
+cp configs/arbitrum-sepolia.deployment.json deployment.json
+export NOX_IMAGE="$(python3 -c 'import json; print(json.load(open("deployment.json"))["release"]["noxImage"])')"
+export NOX_PREFLIGHT_IMAGE="$(python3 -c 'import json; print(json.load(open("deployment.json"))["release"]["preflightImage"])')"
 docker run --rm "$NOX_IMAGE" keygen > .env
 chmod 600 .env
 cp configs/relay.toml config.toml
@@ -34,7 +57,7 @@ docker compose up -d
 curl --fail http://127.0.0.1:15001/topology
 ```
 
-The generated secrets remain in `.env`. Do not print or paste that file into logs, issues, or shell history. Register the node after it starts by following [REGISTRATION.md](REGISTRATION.md). `docker compose up` runs the same preflight itself, so neither the node nor the price server starts if the manifest is absent, an image differs from the release record, or on-chain verification fails.
+The generated secrets remain in `.env`. Do not print or paste that file into logs, issues, or shell history. `grep 'for registration' .env` prints only the public values. Register the node after it starts by following [REGISTRATION.md](REGISTRATION.md). `docker compose up` runs the same preflight itself, so neither the node nor the price server starts if the manifest is absent, an image differs from the release record, or on-chain verification fails.
 
 ## Exit Nodes
 
@@ -43,15 +66,14 @@ Exit nodes request and verify signed execution quotes, receive the corresponding
 An exit additionally requires:
 
 - A funded secp256k1 wallet in `NOX__ETH_WALLET_PRIVATE_KEY`
-- The committed paid-execution `NoxEntryPoint` address in `nox_entry_point_address`
-- The committed paid-execution deployment manifest
-- A price source for every configured fee asset
-- An RPC endpoint that supports the configured simulation and fee-estimation policy
+- A price source for every configured fee asset. The bundled price server serves `ethereum`, `usd-coin` and
+  `bitcoin`; the template values SOKA through `usd-coin`
+- An RPC endpoint that serves `eth_simulateV1`. `https://sepolia-rollup.arbitrum.io/rpc` does not (it answers
+  `-32603 method handler crashed`), so every paid transaction would be rejected. The template uses
+  `https://arbitrum-sepolia-rpc.publicnode.com`
 
-The checked-in exit template deliberately uses zero addresses for `nox_entry_point_address` and the payment
-adapter. Exit preflight remains closed until the paid-execution deployment record supplies both addresses.
-
-After inserting the committed EntryPoint, RewardPool, adapter, and fee-asset values into a local `config.toml`:
+The exit template already carries the committed `NoxEntryPoint`, `NoxRewardPool`, `HowlPaymentAdapter` and SOKA
+fee-asset values:
 
 ```bash
 cp configs/exit.toml config.toml
@@ -64,7 +86,7 @@ curl --fail http://127.0.0.1:15004/health
 curl --fail http://127.0.0.1:15001/topology
 ```
 
-Never expose the price server or admin port publicly. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
+Never expose the price server publicly. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
 
 ## Target Network Configuration
 
@@ -76,22 +98,27 @@ The checked-in templates target Arbitrum Sepolia:
 | Benchmark mode | `false` |
 | Native price asset | `ethereum`, 18 decimals |
 
-The checked-in deployment template leaves the registry and paid-execution addresses, registry start block,
-runtime-code hashes, proxy implementation slots and hashes, fee-asset list, and image digests empty until the ABI-compatible contracts are deployed. Copy the signed release record to the ignored `deployment.json` path before Compose startup. Both role templates
-therefore fail preflight by design. Preflight compares the role config and both runtime image digests to that record, verifies the configured
+`configs/arbitrum-sepolia.deployment.json` is generated from the contracts deploy record and carries the
+registry and paid-execution addresses, registry start block, runtime-code hashes, proxy implementation slots and
+hashes, fee-asset list, and image digests. Copy it to the ignored `deployment.json` path before Compose startup.
+Preflight compares the role config and both runtime image digests to that record, verifies the configured
 RPC chain, checks every recorded runtime `codeHash` through `eth_getProof`, verifies each proxy implementation,
 checks EntryPoint, sandbox, adapter, BundleExecutor, RewardPool role and asset wiring, and compares token
 `decimals()` on chain. Do not infer or substitute an address or price mapping.
 
-The historical Arbitrum Sepolia registry exposes an older profile ABI and is not compatible with the current
-complete topology verification. Registry, indexer, SDK, node image, and operator manifest must roll out as one
-audited release.
+The retired April 2026 registry exposes an older profile ABI and is not compatible with the current complete
+topology verification. Registry, indexer, SDK, node image, and operator manifest roll out as one release.
 
 The indexer must use the same registry address and exact nonzero deployment start block from the manifest. Its
 `/seed/topology` endpoint returns 503 until replayed membership proves the registry count and fingerprint at a
 single processed block. Do not substitute persisted database rows for this proof.
 
-Relay nodes use zero paid-execution contract addresses and do not need an exit wallet or oracle. Exit nodes must have explicit, nonzero paid-execution addresses and pass preflight.
+Relay nodes do not use the paid-execution addresses (the template sets them to the committed deployment anyway)
+and do not need an exit wallet or oracle. Exit nodes must have the committed paid-execution addresses and pass
+preflight.
+
+`bootstrap_topology_urls` is empty in both templates. The node replays the registry from `chain_start_block`,
+which takes only a few `eth_getLogs` calls.
 
 ## Configuration
 
@@ -116,10 +143,15 @@ so it can reject a quote even when that quote is below the per-transaction ceili
 | Port | Purpose | Exposure |
 |---|---|---|
 | `15000/tcp` | libp2p | Public |
-| `15001/tcp` | Admin and metrics | Local only |
+| `15001/tcp` | Metrics and topology (read-only) | Public: the indexer probes it |
 | `15002/tcp` | Client ingress | Entry nodes only |
 | `15003/tcp` | Topology API | Seed nodes only |
 | `15004/tcp` | Price server | Local only |
+
+`metrics_port` must equal `p2p_port + 1`. The Hisoka indexer derives the metrics URL from your registered
+multiaddr (TCP port + 1) and polls `/topology` and `/metrics/json` there. If it cannot reach the port, the seed
+lists your node as offline and clients do not route through it. The port serves read-only metrics, topology and
+events; the admin write endpoint exists only in `benchmark_mode`, which preflight rejects.
 
 ## Health and Monitoring
 
@@ -138,7 +170,7 @@ For exits, alert on wallet balance, stale-price and unsupported-token rejections
 Before upgrading:
 
 1. Record the current `NOX_IMAGE`, `NOX_PREFLIGHT_IMAGE`, manifest release record, and `docker compose ps` output.
-2. Verify both target digests against the signed release record, copy that exact record to `deployment.json`, and export the matching values.
+2. Verify both target digests against the committed manifest (`configs/arbitrum-sepolia.deployment.json`), copy it to `deployment.json`, and export the matching values.
 3. Stop one canary node cleanly and snapshot its `nox-data`, `nox-identity`, and `nox-logs` volumes using the host or cloud volume-snapshot facility. Record the three snapshot identifiers before continuing.
 4. Run the one-time ownership migration below while the node remains stopped.
 5. Run preflight against the unchanged role config, target Nox digest, and target manifest.
