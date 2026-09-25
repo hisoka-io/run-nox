@@ -172,7 +172,7 @@ sed \
 exit_output="$("$repo_dir/scripts/preflight.sh" exit "$exit_config" "$image" "$deployment_fixture")"
 [[ "$exit_output" == *"preflight passed for exit"* ]]
 [[ "$exit_output" != *"$NOX__ETH_WALLET_PRIVATE_KEY"* ]]
-grep -q '^quote_maximum_transaction_gas = 12000000$' "$exit_config"
+grep -q '^quote_maximum_transaction_gas = 20000000$' "$exit_config"
 
 sed 's/^nox_entry_point_address = .*/nox_entry_point_address = "0x0000000000000000000000000000000000000000"/' \
   "$exit_config" >"$unset_entry_config"
