@@ -2,8 +2,8 @@
 # Docs: https://github.com/hisoka-io/run-nox
 #
 # Quick start:
-#   1. Export NOX_IMAGE and NOX_PREFLIGHT_IMAGE from the signed release record.
-#   2. Copy the signed deployment record to ./deployment.json.
+#   1. cp configs/arbitrum-sepolia.deployment.json deployment.json
+#   2. Export NOX_IMAGE and NOX_PREFLIGHT_IMAGE from its "release" object.
 #   3. docker run --rm "$NOX_IMAGE" keygen > .env
 #   4. cp configs/relay.toml config.toml   # or configs/exit.toml
 #   5. docker compose up -d

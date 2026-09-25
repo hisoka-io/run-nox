@@ -7,12 +7,17 @@
 #   1. Copy this file: cp configs/exit.toml config.toml
 #   2. Private keys are loaded from .env (generate with `nox keygen`)
 #   3. Fund your ETH wallet with Arb Sepolia ETH (see REGISTRATION.md)
+#
+# Deployment: 2026-09-25 (configs/arbitrum-sepolia.deployment.json). The April
+# 2026 registry 0x8626aF80db409BeD3C19871FAdf9b0Ce7Aa641Bc is retired.
 
 # --- Core ---
 
-# Ethereum RPC -used for topology sync AND transaction submission
-# For exit nodes, a reliable RPC is important. Public RPC works for testnet.
-eth_rpc_url = "https://sepolia-rollup.arbitrum.io/rpc"
+# Ethereum RPC -used for topology sync, paid-execution simulation AND
+# transaction submission. It MUST support eth_simulateV1: without it every paid
+# transaction is rejected. https://sepolia-rollup.arbitrum.io/rpc does NOT
+# (it returns -32603 "method handler crashed"); publicnode does.
+eth_rpc_url = "https://arbitrum-sepolia-rpc.publicnode.com"
 
 # Chain ID: 421614 = Arbitrum Sepolia
 chain_id = 421614
@@ -26,14 +31,14 @@ oracle_url = "http://127.0.0.1:15004"
 
 # --- Contract Addresses ---
 
-# NoxRegistry: node registration, topology, staking
-registry_contract_address = "0x0000000000000000000000000000000000000000"
+# NoxRegistry (UUPS proxy): node registration, topology, staking
+registry_contract_address = "0xF7BFf88A1412054a001Dc4b8aCBddAd6F9b26cB6"
 
-# Set from the committed paid-execution deployment.
-nox_reward_pool_address = "0x0000000000000000000000000000000000000000"
+# NoxRewardPool (UUPS proxy)
+nox_reward_pool_address = "0xA487BAa4f2C3fAA01C70066EE88b6F7fD6f1361D"
 
-# Set from the committed paid-execution deployment before running an exit.
-nox_entry_point_address = "0x0000000000000000000000000000000000000000"
+# NoxEntryPoint (EIP-712 verifyingContract for execution quotes)
+nox_entry_point_address = "0xad911Ca217C6dC779fCE6A6538bDda3071c38E7E"
 
 # --- Keys (loaded from .env via environment variables) ---
 # Generate with the same immutable image digest used by Docker Compose.
@@ -76,7 +81,10 @@ p2p_listen_addr = "0.0.0.0"
 # P2P identity persistence (inside Docker volume)
 p2p_identity_path = "/var/lib/nox/identity/p2p_id.key"
 
-# Admin/metrics API (localhost-only by default)
+# Metrics/topology API. MUST be p2p_port + 1 and reachable from the internet:
+# the Hisoka indexer derives it from your registered multiaddr (tcp port + 1)
+# and probes /topology and /metrics/json. A node it cannot reach is published
+# as offline and clients will not route through it. The port is read-only.
 metrics_port = 15001
 
 # HTTP ingress -exit nodes typically don't accept client packets directly
@@ -85,10 +93,9 @@ ingress_port = 0
 # Topology API -set to 15003 to serve as a seed node, 0 to disable
 topology_api_port = 0
 
-# Topology bootstrap -fetch initial peer list from the Hisoka seed service
-bootstrap_topology_urls = [
-    "https://api.hisoka.io/seed/topology"
-]
+# Topology bootstrap. Leave empty: the node replays the registry from
+# chain_start_block, which takes only a few eth_getLogs calls.
+bootstrap_topology_urls = []
 
 # --- Relay Pipeline ---
 
@@ -96,7 +103,8 @@ min_pow_difficulty = 3
 db_path = "/var/lib/nox/data/db"
 benchmark_mode = false
 block_poll_interval_secs = 5
-chain_start_block = 0
+# Registry deployment block (meta.startBlock in the deployment manifest).
+chain_start_block = 312414608
 max_broadcast_tx_size = 262144
 response_prune_interval_secs = 60
 
@@ -138,16 +146,19 @@ timeout_seconds = 300
 prune_interval_seconds = 60
 
 # --- Token Registry (Profitability Engine) ---
-# Maps testnet token addresses to oracle price IDs.
-# Required for exit nodes to calculate paid-transaction profitability.
+# One [[tokens]] entry per deployment feeAssets entry; preflight requires an
+# exact match. SOKA is the testnet fee asset. The bundled price server only
+# serves "ethereum", "usd-coin" and "bitcoin", so SOKA is valued through the
+# "usd-coin" feed (1 SOKA = 1 USD). decimals must match SOKA.decimals() on chain.
 
 [[tokens]]
-address = "0x0000000000000000000000000000000000000000"
-symbol = ""
-decimals = 0
-price_id = ""
+address = "0x0F69cf1c9F4FF72471701036dd789c934458e630"
+symbol = "SOKA"
+decimals = 18
+price_id = "usd-coin"
 
+# HowlPaymentAdapter, paid in the deployment's fee assets.
 [[payment_adapters]]
-address = "0x0000000000000000000000000000000000000000"
-fee_assets = ["0x0000000000000000000000000000000000000000"]
+address = "0xfC874B702F8D59B60B35582855505F4f60cE766D"
+fee_assets = ["0x0F69cf1c9F4FF72471701036dd789c934458e630"]
 maximum_payment_gas = 4000000

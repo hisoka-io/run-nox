@@ -2,3 +2,4 @@
 config.toml
 deployment.json
 __pycache__/
+!scripts/fixtures/deployment.json
