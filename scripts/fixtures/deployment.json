@@ -1,0 +1,51 @@
+{
+  "meta": {
+    "network": "arbitrum-sepolia",
+    "chainId": 421614,
+    "startBlock": 123
+  },
+  "release": {
+    "noxImage": "ghcr.io/hisoka-io/nox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "preflightImage": "python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "contracts": {
+    "noxRegistry": "0x5555555555555555555555555555555555555555",
+    "noxRewardPool": "0x2222222222222222222222222222222222222222",
+    "noxSandboxImplementation": "0x8888888888888888888888888888888888888888",
+    "noxEntryPoint": "0x1111111111111111111111111111111111111111",
+    "howlPaymentAdapter": "0x4444444444444444444444444444444444444444",
+    "bundleExecutor": "0x9999999999999999999999999999999999999999",
+    "darkPool": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "stakingToken": "0x3333333333333333333333333333333333333333"
+  },
+  "contractCodeHashes": {
+    "noxRegistry": "0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d",
+    "noxRewardPool": "0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d",
+    "noxSandboxImplementation": "0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d",
+    "noxEntryPoint": "0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d",
+    "howlPaymentAdapter": "0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d",
+    "bundleExecutor": "0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d",
+    "darkPool": "0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d",
+    "stakingToken": "0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d"
+  },
+  "proxySlots": {
+    "darkPool": {
+      "impl": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "admin": "0x0000000000000000000000000000000000000000"
+    },
+    "noxRegistry": {
+      "impl": "0x6666666666666666666666666666666666666666",
+      "admin": "0x0000000000000000000000000000000000000000"
+    },
+    "noxRewardPool": {
+      "impl": "0x7777777777777777777777777777777777777777",
+      "admin": "0x0000000000000000000000000000000000000000"
+    }
+  },
+  "proxyImplementationCodeHashes": {
+    "darkPool": "0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d",
+    "noxRegistry": "0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d",
+    "noxRewardPool": "0x07ad118d6cc8642c86c03827f276d8b791a65e5c99a3845faf186be720a1455d"
+  },
+  "feeAssets": ["0x3333333333333333333333333333333333333333"]
+}
