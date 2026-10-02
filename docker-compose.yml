@@ -6,8 +6,8 @@
 #   2. Export NOX_IMAGE and NOX_PREFLIGHT_IMAGE from its "release" object.
 #   3. docker run --rm "$NOX_IMAGE" nox keygen > .env
 #   4. cp configs/relay.toml config.toml   # or configs/exit.toml
-#   5. Relay: docker compose up -d
-#      Exit:  docker compose --profile exit up -d   (adds the price server)
+#   5. Exit only: echo 'COMPOSE_PROFILES=exit' >> .env   (adds the price server)
+#   6. docker compose up -d
 
 services:
   preflight:
