@@ -136,6 +136,34 @@ def positive(source: dict[str, object], field: str) -> int:
     return value
 
 
+# Node defaults (nox-node config.rs) when neither TOML nor NOX__ env sets a port.
+DEFAULT_PORTS = {"p2p_port": 9000, "metrics_port": 9090}
+
+
+def effective_port(config: dict[str, object], field: str) -> int:
+    """Return the port the node will use: NOX__<FIELD> overrides TOML, which overrides the default."""
+    override = os.environ.get(f"NOX__{field.upper()}")
+    if override is not None:
+        if re.fullmatch(r"[0-9]{1,5}", override) is None:
+            fail(f"NOX__{field.upper()} must be a TCP port number")
+        value: object = int(override)
+    else:
+        value = config.get(field, DEFAULT_PORTS[field])
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 65535:
+        fail(f"{field} must be a TCP port in 1..=65535")
+    return value
+
+
+def validate_ports(config: dict[str, object]) -> None:
+    p2p_port = effective_port(config, "p2p_port")
+    metrics_port = effective_port(config, "metrics_port")
+    if metrics_port != p2p_port + 1:
+        fail(
+            "metrics_port must equal p2p_port + 1: the indexer probes the registered "
+            "multiaddr port + 1, so any other value lists the node as offline"
+        )
+
+
 class Rpc:
     def __init__(self, url: str) -> None:
         self.url = url
@@ -288,6 +316,7 @@ def validate_common(
         fail("chain_id and chain_start_block must equal the committed deployment")
     if config.get("benchmark_mode") is not False:
         fail("benchmark_mode must be false")
+    validate_ports(config)
     if config.get("chain_data_fee_mode") != "rpc_gas_estimate_includes_data_fee":
         fail("chain_data_fee_mode must use the verified RPC total-gas policy")
     if config.get("native_asset_price_id") != "ethereum" or config.get("native_asset_decimals") != 18:
