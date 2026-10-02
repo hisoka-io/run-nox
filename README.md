@@ -76,7 +76,8 @@ An exit additionally requires:
 
 The exit template already carries the committed `NoxEntryPoint`, `NoxRewardPool`, `HowlPaymentAdapter` and SOKA
 fee-asset values. The price server belongs to the Compose `exit` profile, so an exit enables that profile once in
-`.env`; every later `docker compose` command (`up`, `ps`, `logs`, `down`) then includes it:
+`.env`; every later `docker compose` command (`up`, `ps`, `logs`, `down`) then includes it. An exit set up before
+the profile existed must add the same line, or `docker compose up` starts it without a price server:
 
 ```bash
 cp configs/exit.toml config.toml
@@ -185,8 +186,7 @@ is rejected rather than priced with a fallback.
 
 The checked-in 20,000,000 transaction-gas ceiling (`quote_maximum_transaction_gas`) leaves headroom over a
 Howl-paid execution, which needs a gas limit of about 10.8M on Arbitrum because payment and action gas are
-reserved up front (the 2026-09-25 fleet measurement). Operators must remeasure every enabled payment adapter and action class,
-then price the full signed reservation. `quote_max_pending_sponsored_gas` remains the aggregate exposure limit,
+reserved up front. Operators must remeasure every enabled payment adapter and action class, then price the full signed reservation. `quote_max_pending_sponsored_gas` remains the aggregate exposure limit,
 so it can reject a quote even when that quote is below the per-transaction ceiling.
 
 ## Ports
