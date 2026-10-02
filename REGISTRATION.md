@@ -78,8 +78,7 @@ An exit operator uses `configs/exit.toml`, which already carries the committed `
 
 - a funded wallet (see Exit Funding below);
 - an RPC that serves `eth_simulateV1`, such as `https://arbitrum-sepolia-rpc.publicnode.com` (the template
-  default). `https://sepolia-rollup.arbitrum.io/rpc` does not serve it, and every paid transaction would be
-  rejected;
+  default); without it every paid transaction is rejected (see the README for `sepolia-rollup.arbitrum.io`);
 - a passing `scripts/preflight.sh exit config.toml "$NOX_IMAGE" deployment.json`.
 
 Compose repeats this validation before it starts either service.
