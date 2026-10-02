@@ -4,7 +4,7 @@ This repository is the canonical operator kit for a [NOX](https://github.com/his
 
 ## Requirements
 
-- Docker Engine 20.10 or newer and Docker Compose v2
+- Docker Engine 20.10 or newer and Docker Compose v2.20 or newer
 - Python 3.11 or newer for TOML preflight validation
 - A public IPv4 address with TCP ports `15000` (libp2p) and `15001` (metrics, read-only) open
 - An Arbitrum Sepolia RPC endpoint. Exits need one that serves `eth_simulateV1`, such as
@@ -74,10 +74,12 @@ An exit additionally requires:
   `https://arbitrum-sepolia-rpc.publicnode.com`
 
 The exit template already carries the committed `NoxEntryPoint`, `NoxRewardPool`, `HowlPaymentAdapter` and SOKA
-fee-asset values:
+fee-asset values. The price server belongs to the Compose `exit` profile, so an exit enables that profile once in
+`.env`; every later `docker compose` command (`up`, `ps`, `logs`, `down`) then includes it:
 
 ```bash
 cp configs/exit.toml config.toml
+echo 'COMPOSE_PROFILES=exit' >> .env
 set -a
 . ./.env
 set +a
@@ -87,7 +89,9 @@ curl --fail http://127.0.0.1:15004/health
 curl --fail http://127.0.0.1:15001/topology
 ```
 
-Never expose the price server publicly. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
+Never expose the price server publicly: Compose binds it to `127.0.0.1`. Relays do not run it. The node starts
+after the price server container without waiting for a fresh price, so a price-API outage does not keep an exit
+off the mixnet; the exit refuses paid requests until it can read fresh prices. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
 
 ## Target Network Configuration
 
@@ -159,8 +163,9 @@ events; the admin write endpoint exists only in `benchmark_mode`, which prefligh
 ```bash
 docker compose ps
 docker compose logs --tail 100 nox
-docker compose logs --tail 100 price-server
 curl --fail http://127.0.0.1:15001/topology
+# Exits only:
+docker compose logs --tail 100 price-server
 curl --fail http://127.0.0.1:15004/health
 ```
 

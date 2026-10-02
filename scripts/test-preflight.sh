@@ -58,6 +58,21 @@ if "source: ./config.toml" not in nox or "target: /etc/nox/config.toml" not in n
     raise SystemExit("nox does not mount the operator configuration explicitly")
 if nox.count("create_host_path: false") != 1:
     raise SystemExit("nox can create an empty configuration path")
+
+price_server = service("price-server")
+if 'profiles: ["exit"]' not in price_server:
+    raise SystemExit("price-server must run only under the exit profile")
+if "PRICE_SERVER_BIND=127.0.0.1" not in price_server:
+    raise SystemExit("price-server must bind to loopback")
+optional_price = (
+    "price-server:\n"
+    "        condition: service_started\n"
+    "        required: false"
+)
+if optional_price not in nox:
+    raise SystemExit("nox must not wait for a healthy price server, and relays run without one")
+if "service_healthy" in nox:
+    raise SystemExit("nox must not wait for a healthy price server")
 PY
 
 python3 - "$repo_dir/configs" <<'PY'
