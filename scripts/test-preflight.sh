@@ -141,6 +141,24 @@ if python3 "$repo_dir/scripts/preflight_config.py" auto "$relay_config" "$deploy
   exit 1
 fi
 
+moved_metrics_config="$(mktemp)"
+sed 's/^metrics_port = .*/metrics_port = 15005/' "$relay_config" >"$moved_metrics_config"
+if "$repo_dir/scripts/preflight.sh" relay "$moved_metrics_config" "$image" "$deployment_fixture" >/dev/null 2>&1; then
+  echo "relay preflight accepted a metrics_port other than p2p_port + 1" >&2
+  exit 1
+fi
+moved_both_config="$(mktemp)"
+sed -e 's/^p2p_port = .*/p2p_port = 15100/' -e 's/^metrics_port = .*/metrics_port = 15101/' \
+  "$relay_config" >"$moved_both_config"
+"$repo_dir/scripts/preflight.sh" relay "$moved_both_config" "$image" "$deployment_fixture" >/dev/null
+if NOX__P2P_PORT=15200 "$repo_dir/scripts/preflight.sh" relay "$relay_config" "$image" "$deployment_fixture" >/dev/null 2>&1; then
+  echo "relay preflight ignored a NOX__P2P_PORT override that breaks p2p_port + 1" >&2
+  exit 1
+fi
+NOX__P2P_PORT=15200 NOX__METRICS_PORT=15201 \
+  "$repo_dir/scripts/preflight.sh" relay "$relay_config" "$image" "$deployment_fixture" >/dev/null
+rm -f "$moved_metrics_config" "$moved_both_config"
+
 wrong_asset_config="$(mktemp)"
 exit_config="$(mktemp)"
 missing_quote_config="$(mktemp)"
