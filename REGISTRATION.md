@@ -113,7 +113,15 @@ docker compose logs --tail 100 nox
 ```
 
 Confirm from outside the host that TCP ports `15000` and `15001` are reachable and that the registered multiaddr
-matches the public address and PeerId.
+matches the public address and PeerId. The Hisoka indexer should list the node as `online` within a few minutes:
+
+```bash
+curl --fail --silent https://api.hisoka.io/seed/topology | python3 -c '
+import json, sys
+address = sys.argv[1].lower()
+print([n["status"] for n in json.load(sys.stdin)["liveness"] if n["address"] == address] or "not listed")
+' YOUR_ETH_ADDRESS
+```
 
 ## Exit Funding
 
@@ -128,3 +136,19 @@ registry address, and `chain_start_block`.
 
 Do not delete Docker volumes during troubleshooting. The identity and data volumes are required for stable peer
 identity and safe transaction recovery.
+
+## Maintainer Checklist
+
+Before registering a requested node:
+
+1. The multiaddr ends in `/p2p/<PeerId>` and that PeerId equals the PeerId field. Ask the operator for the
+   public `nox check-config` output when the values were reused from an earlier deployment.
+2. The Sphinx key is not registered yet: `sphinxKeyOwner(bytes32)` on the registry returns the zero address.
+3. From outside the host, TCP `15000` accepts a connection and `curl --fail http://IP:15001/topology` answers.
+   Do not register a node whose metrics port is closed: the indexer would list it as offline.
+4. The ingress URL is empty unless it is `https://` and answers `GET /health`. Do not register plain-http
+   ingress.
+5. Pass the role explicitly: `--role 1` for a relay, `--role 2` for an approved exit.
+
+After the governance transaction executes, check `isActiveRelayer`, confirm the indexer lists the node `online`,
+and comment on the issue with the transaction hash.

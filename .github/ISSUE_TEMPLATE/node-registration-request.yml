@@ -45,8 +45,8 @@ body:
     id: ingress_url
     attributes:
       label: Ingress URL
-      description: "Required by the registry contract. Entry nodes only need a real value (e.g., https://nox-N.hisoka.io). Relay and exit nodes can leave this empty or use http://YOUR_PUBLIC_IP:15002."
-      placeholder: "https://your-node.example.com"
+      description: "Leave empty unless your node serves client ingress over https (a TLS proxy in front of ingress_port, which the template disables). Plain http ingress URLs are not registered: browser clients cannot use them."
+      placeholder: "https://your-node.example.com (or leave empty)"
     validations:
       required: false
 
