@@ -32,14 +32,19 @@ cd run-nox
 cp configs/arbitrum-sepolia.deployment.json deployment.json
 export NOX_IMAGE="$(python3 -c 'import json; print(json.load(open("deployment.json"))["release"]["noxImage"])')"
 export NOX_PREFLIGHT_IMAGE="$(python3 -c 'import json; print(json.load(open("deployment.json"))["release"]["preflightImage"])')"
-docker run --rm "$NOX_IMAGE" keygen > .env
+docker run --rm "$NOX_IMAGE" nox keygen > .env
 chmod 600 .env
+grep -c '^NOX__' .env          # must print 3
 grep 'for registration' .env   # public values only
 ```
 
+The image has no entrypoint, so the command must name the `nox` binary (`... "$NOX_IMAGE" nox keygen`). If
+`grep -c` prints anything other than 3, `.env` is empty or incomplete: delete it and run the command again.
+
 Store `.env` through the approved secret-management path. Do not attach it to a registration request or paste it
 into logs. If your node was registered on the retired registry, keep your existing `.env`: the new registration
-must use the same Sphinx key, PeerId and address.
+must use the same Sphinx key, PeerId and address. Do not run `keygen` again for a node that already has keys; it
+creates a new identity.
 
 ## 2. Configure and Validate
 
@@ -51,9 +56,15 @@ set -a
 . ./.env
 set +a
 scripts/preflight.sh relay config.toml "$NOX_IMAGE" deployment.json
+docker run --rm --env-file .env -v "$PWD/config.toml:/etc/nox/config.toml:ro" \
+  "$NOX_IMAGE" nox --config /etc/nox/config.toml check-config
 docker compose up -d
 curl --fail http://127.0.0.1:15001/topology
 ```
+
+`check-config` loads the same config and `.env` the node will use and prints only public values: role, chain,
+registry, start block, Sphinx public key, PeerId and address. Use it to confirm the values you submit in step 3,
+in particular when you reuse keys from an earlier deployment.
 
 Open both of these TCP ports to the internet:
 

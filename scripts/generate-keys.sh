@@ -5,7 +5,7 @@
 # For full key generation including public key derivation and PeerId,
 # use the Docker-based approach instead:
 #
-#   docker run --rm "$NOX_IMAGE" keygen > .env
+#   docker run --rm "$NOX_IMAGE" nox keygen > .env
 #
 # This script is a fallback for environments without Docker.
 
@@ -28,7 +28,7 @@ echo "# Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "# SAVE THIS OUTPUT. Private keys cannot be recovered."
 echo "#"
 echo "# To derive public keys (sphinx key, PeerId, ETH address),"
-echo '# use: docker run --rm "$NOX_IMAGE" keygen'
+echo '# use: docker run --rm "$NOX_IMAGE" nox keygen'
 echo ""
 echo "# === Sphinx Routing Key (X25519) ==="
 echo "NOX__ROUTING_PRIVATE_KEY=$(openssl rand -hex 32)"

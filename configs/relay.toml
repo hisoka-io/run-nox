@@ -8,7 +8,8 @@
 #
 # Setup:
 #   1. Copy this file: cp configs/relay.toml config.toml
-#   2. Private keys are loaded from .env (generate with `nox keygen`)
+#   2. Private keys are loaded from .env. Generate it with
+#      docker run --rm "$NOX_IMAGE" nox keygen > .env   (see REGISTRATION.md)
 
 # --- Core ---
 
