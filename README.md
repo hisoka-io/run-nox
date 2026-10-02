@@ -69,9 +69,10 @@ An exit additionally requires:
 - A funded secp256k1 wallet in `NOX__ETH_WALLET_PRIVATE_KEY`
 - A price source for every configured fee asset. The bundled price server serves `ethereum`, `usd-coin` and
   `bitcoin`; the template values SOKA through `usd-coin`
-- An RPC endpoint that serves `eth_simulateV1`. `https://sepolia-rollup.arbitrum.io/rpc` does not (it answers
-  `-32603 method handler crashed`), so every paid transaction would be rejected. The template uses
-  `https://arbitrum-sepolia-rpc.publicnode.com`
+- An RPC endpoint that serves `eth_simulateV1`; without it every paid transaction is rejected. The template uses
+  `https://arbitrum-sepolia-rpc.publicnode.com`, as the Hisoka exits do. `https://sepolia-rollup.arbitrum.io/rpc`
+  answered `-32603 method handler crashed` during the September 2026 cutover but simulated a recorded paid
+  transaction correctly on 2026-10-02. If you use it, watch the exit logs for simulation errors
 
 The exit template already carries the committed `NoxEntryPoint`, `NoxRewardPool`, `HowlPaymentAdapter` and SOKA
 fee-asset values. The price server belongs to the Compose `exit` profile, so an exit enables that profile once in
@@ -92,6 +93,31 @@ curl --fail http://127.0.0.1:15001/topology
 Never expose the price server publicly: Compose binds it to `127.0.0.1`. Relays do not run it. The node starts
 after the price server container without waiting for a fresh price, so a price-API outage does not keep an exit
 off the mixnet; the exit refuses paid requests until it can read fresh prices. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
+
+### Claiming Exit Credit
+
+Exit credit accrues in `NoxRewardPool` to the exit wallet, and only that wallet can claim it with
+`claimExitCredit(asset, recipient, amount)`. **Stop the node before you claim and start it again afterwards; never
+claim while it runs.** The node reads its wallet nonce when it starts, so any transaction sent from the exit wallet
+by another tool while the node runs leaves the node with a stale nonce. Its next paid submission then stays stuck
+in the outbox and blocks later ones, and a restart does not clear it. The same applies to any other transaction
+from the exit wallet, such as moving funds.
+
+```bash
+curl --fail --silent http://127.0.0.1:15001/metrics | grep '^nox_eth_tx_pending '   # wait until it reads 0
+docker compose stop nox
+set -a; . ./.env; set +a
+POOL=0xA487BAa4f2C3fAA01C70066EE88b6F7fD6f1361D
+SOKA=0x0F69cf1c9F4FF72471701036dd789c934458e630
+RPC=https://arbitrum-sepolia-rpc.publicnode.com
+EXIT=$(sed -n 's/^# Address (for registration): //p' .env)
+cast call "$POOL" 'claimableExit(address,address)(uint256)' "$EXIT" "$SOKA" --rpc-url "$RPC"
+cast send "$POOL" 'claimExitCredit(address,address,uint256)' "$SOKA" RECIPIENT AMOUNT_WEI \
+  --private-key "$NOX__ETH_WALLET_PRIVATE_KEY" --rpc-url "$RPC"
+docker compose up -d
+```
+
+`cast send` waits for the receipt. Start the node only after the claim succeeded; on start it reads the new nonce.
 
 ## Target Network Configuration
 
@@ -157,8 +183,9 @@ Exit token entries are an allowlist. Each configured address must appear in the 
 match on-chain decimals, and have explicit symbol and oracle identifiers in operator config. An unconfigured token
 is rejected rather than priced with a fallback.
 
-The checked-in 12,000,000 transaction-gas ceiling covers the measured Howl EntryPoint plan of 10,273,982 gas
-after the configured 20% estimate buffer. Operators must remeasure every enabled payment adapter and action class,
+The checked-in 20,000,000 transaction-gas ceiling (`quote_maximum_transaction_gas`) leaves headroom over a
+Howl-paid execution, which needs a gas limit of about 10.8M on Arbitrum because payment and action gas are
+reserved up front (the 2026-09-25 fleet measurement). Operators must remeasure every enabled payment adapter and action class,
 then price the full signed reservation. `quote_max_pending_sponsored_gas` remains the aggregate exposure limit,
 so it can reject a quote even when that quote is below the per-transaction ceiling.
 
