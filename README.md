@@ -168,9 +168,9 @@ so it can reject a quote even when that quote is below the per-transaction ceili
 |---|---|---|
 | `15000/tcp` | libp2p | Public |
 | `15001/tcp` | Metrics and topology (read-only) | Public: the indexer probes it |
-| `15002/tcp` | Client ingress | Entry nodes only |
-| `15003/tcp` | Topology API | Seed nodes only |
-| `15004/tcp` | Price server | Local only |
+| `15002/tcp` | Client ingress | Off in the templates. Entry nodes only, behind an https proxy |
+| `15003/tcp` | Topology API | Off in the templates |
+| `15004/tcp` | Price server | Exits only, bound to `127.0.0.1` |
 
 `metrics_port` must equal `p2p_port + 1`. The Hisoka indexer derives the metrics URL from your registered
 multiaddr (TCP port + 1) and polls `/topology` and `/metrics/json` there. If it cannot reach the port, the seed

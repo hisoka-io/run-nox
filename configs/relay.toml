@@ -58,14 +58,16 @@ p2p_identity_path = "/var/lib/nox/identity/p2p_id.key"
 # as offline and clients will not route through it. The port is read-only.
 metrics_port = 15001
 
-# HTTP ingress for client Sphinx packets (entry nodes)
-# Set to 15002 if you want your node to accept client packets directly.
-# Set to 0 to disable (mix-only relay).
-ingress_port = 15002
+# HTTP ingress for client Sphinx packets (entry nodes). 0 = disabled.
+# Clients only use an entry registered with an https ingress URL, so leave this
+# at 0 unless you run a TLS proxy in front of it and ask for entry
+# registration with that https URL. A plain-http port is not registered.
+ingress_port = 0
 
-# Public topology API -other nodes can bootstrap from this endpoint
-# Set to 15003 if you want to serve as a seed node. Set to 0 to disable.
-topology_api_port = 15003
+# Public topology API for bootstrapping other nodes. 0 = disabled. Nodes and
+# clients bootstrap from the registry and the Hisoka indexer, so third-party
+# relays do not need it.
+topology_api_port = 0
 
 # Topology bootstrap. Leave empty: the node replays the registry from
 # chain_start_block, which takes only a few eth_getLogs calls.
