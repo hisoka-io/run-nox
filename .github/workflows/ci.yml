@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Daily: a contract upgrade makes the live preflight fail until the
+    # manifest is regenerated (see "After a Contract Upgrade" in README.md).
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline:
+    name: Preflight tests and Compose
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Preflight tests
+        run: bash scripts/test-preflight.sh
+      - name: Compose resolves for relays and exits
+        run: |
+          touch .env config.toml deployment.json
+          export NOX_IMAGE="$(jq -r .release.noxImage configs/arbitrum-sepolia.deployment.json)"
+          export NOX_PREFLIGHT_IMAGE="$(jq -r .release.preflightImage configs/arbitrum-sepolia.deployment.json)"
+          relay="$(docker compose config --services | sort | tr '\n' ' ')"
+          exit_services="$(docker compose --profile exit config --services | sort | tr '\n' ' ')"
+          echo "relay: $relay"
+          echo "exit: $exit_services"
+          test "$relay" = "nox preflight "
+          test "$exit_services" = "nox preflight price-server "
+
+  image:
+    name: Keygen and check-config on the pinned image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Pull the release image
+        run: |
+          NOX_IMAGE="$(jq -r .release.noxImage configs/arbitrum-sepolia.deployment.json)"
+          echo "NOX_IMAGE=$NOX_IMAGE" >> "$GITHUB_ENV"
+          docker pull --quiet "$NOX_IMAGE"
+      - name: Documented keygen command produces a complete .env
+        run: |
+          umask 077
+          docker run --rm "$NOX_IMAGE" nox keygen > .env
+          test "$(grep -c '^NOX__[A-Z0-9_]*_PRIVATE_KEY=[0-9a-f]\{64\}$' .env)" -eq 3
+          test "$(grep -c 'for registration' .env)" -eq 3
+      - name: Templates pass check-config with the generated keys
+        run: |
+          for role in relay exit; do
+            output="$(docker run --rm --env-file .env \
+              -v "$PWD/configs/$role.toml:/etc/nox/config.toml:ro" \
+              "$NOX_IMAGE" nox --config /etc/nox/config.toml check-config)"
+            grep -q '^configuration OK$' <<<"$output"
+            grep -i "^node_role: $role$" <<<"$output"
+          done
+
+  live:
+    name: Live preflight against Arbitrum Sepolia
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Relay and exit templates verify against the chain
+        env:
+          # Fixed test values, never a real node's keys.
+          NOX__ROUTING_PRIVATE_KEY: "1111111111111111111111111111111111111111111111111111111111111111"
+          NOX__P2P_PRIVATE_KEY: "2222222222222222222222222222222222222222222222222222222222222222"
+          NOX__ETH_WALLET_PRIVATE_KEY: "3333333333333333333333333333333333333333333333333333333333333333"
+        run: |
+          NOX_IMAGE="$(jq -r .release.noxImage configs/arbitrum-sepolia.deployment.json)"
+          for role in relay exit; do
+            for attempt in 1 2 3; do
+              if scripts/preflight.sh "$role" "configs/$role.toml" "$NOX_IMAGE" \
+                configs/arbitrum-sepolia.deployment.json; then
+                continue 2
+              fi
+              echo "attempt $attempt failed; retrying" >&2
+              sleep 15
+            done
+            exit 1
+          done
