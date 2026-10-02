@@ -46,8 +46,9 @@ cd run-nox
 cp configs/arbitrum-sepolia.deployment.json deployment.json
 export NOX_IMAGE="$(python3 -c 'import json; print(json.load(open("deployment.json"))["release"]["noxImage"])')"
 export NOX_PREFLIGHT_IMAGE="$(python3 -c 'import json; print(json.load(open("deployment.json"))["release"]["preflightImage"])')"
-docker run --rm "$NOX_IMAGE" keygen > .env
+docker run --rm "$NOX_IMAGE" nox keygen > .env
 chmod 600 .env
+grep -c '^NOX__' .env   # must print 3
 cp configs/relay.toml config.toml
 set -a
 . ./.env

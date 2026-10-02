@@ -4,7 +4,7 @@
 # Quick start:
 #   1. cp configs/arbitrum-sepolia.deployment.json deployment.json
 #   2. Export NOX_IMAGE and NOX_PREFLIGHT_IMAGE from its "release" object.
-#   3. docker run --rm "$NOX_IMAGE" keygen > .env
+#   3. docker run --rm "$NOX_IMAGE" nox keygen > .env
 #   4. cp configs/relay.toml config.toml   # or configs/exit.toml
 #   5. docker compose up -d
 

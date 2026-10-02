@@ -8,7 +8,7 @@ body:
       value: |
         Thanks for running a NOX node! Fill out the details below. Maintainers register approved nodes in the Arbitrum Sepolia NoxRegistry `0xF7BFf88A1412054a001Dc4b8aCBddAd6F9b26cB6` through the governance Safe. The April 2026 registry is retired, so nodes registered there must request again with the same keys.
 
-        **How to get these values:** Run `docker run --rm "$NOX_IMAGE" keygen` with the `noxImage` digest from `configs/arbitrum-sepolia.deployment.json`, then copy the lines marked "for registration". See REGISTRATION.md.
+        **How to get these values:** Run `docker run --rm "$NOX_IMAGE" nox keygen` with the `noxImage` digest from `configs/arbitrum-sepolia.deployment.json`, then copy the lines marked "for registration". See REGISTRATION.md.
 
         Before submitting, open TCP ports 15000 (libp2p) and 15001 (read-only metrics, probed by the indexer) to the internet.
 

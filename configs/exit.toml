@@ -5,7 +5,8 @@
 #
 # Setup:
 #   1. Copy this file: cp configs/exit.toml config.toml
-#   2. Private keys are loaded from .env (generate with `nox keygen`)
+#   2. Private keys are loaded from .env. Generate it with
+#      docker run --rm "$NOX_IMAGE" nox keygen > .env   (see REGISTRATION.md)
 #   3. Fund your ETH wallet with Arb Sepolia ETH (see REGISTRATION.md)
 #
 # Deployment: 2026-09-25 (configs/arbitrum-sepolia.deployment.json). The April
