@@ -39,12 +39,20 @@ REQUIRED_CONTRACTS = (
     "stakingToken",
 )
 PROXIES = ("darkPool", "noxRegistry", "noxRewardPool")
+# Relays never call DarkPool, which is upgraded on its own schedule. For a relay a
+# DarkPool implementation change is reported but does not block startup; exits,
+# which submit DarkPool-bound transactions, still fail closed.
+RELAY_ADVISORY_PROXIES = ("darkPool",)
 USER_AGENT = "run-nox-preflight/1"
 
 
 def fail(message: str) -> NoReturn:
     print(message, file=sys.stderr)
     raise SystemExit(1)
+
+
+def warn(message: str) -> None:
+    print(f"warning: {message}", file=sys.stderr)
 
 
 def load_json(path: Path, label: str) -> dict[str, object]:
@@ -246,9 +254,9 @@ def address_word(value: str) -> str:
     return "0" * 24 + value[2:]
 
 
-def verify_code(
+def code_matches(
     probe: Rpc, target: str, expected: object, block: str, label: str
-) -> None:
+) -> bool:
     deployed = rpc_hex(probe, "eth_getCode", [target, block])
     if deployed == "0x" or not any(character != "0" for character in deployed[2:]):
         fail(f"{label} has no code on the configured chain")
@@ -256,12 +264,18 @@ def verify_code(
     if not isinstance(proof, dict):
         fail(f"{label} eth_getProof result must be an object")
     actual = code_hash(proof.get("codeHash"), f"{label} on-chain codeHash")
-    if actual != code_hash(expected, f"deployment {label} code hash"):
+    return actual == code_hash(expected, f"deployment {label} code hash")
+
+
+def verify_code(
+    probe: Rpc, target: str, expected: object, block: str, label: str
+) -> None:
+    if not code_matches(probe, target, expected, block, label):
         fail(f"{label} runtime code does not match the committed deployment")
 
 
 def verify_deployment(
-    deployment: dict[str, object], probe: Rpc, block: str
+    deployment: dict[str, object], probe: Rpc, block: str, role: str
 ) -> dict[str, str]:
     raw_contracts = mapping(deployment.get("contracts"), "deployment contracts")
     hashes = mapping(deployment.get("contractCodeHashes"), "contractCodeHashes")
@@ -283,16 +297,24 @@ def verify_deployment(
     for name in PROXIES:
         proxy = mapping(slots.get(name), f"proxySlots.{name}")
         implementation = address(proxy.get("impl"), f"proxySlots.{name}.impl")
+        advisory = role == "relay" and name in RELAY_ADVISORY_PROXIES
+        stale = (
+            f"{name} was upgraded after the committed deployment manifest; "
+            "a relay can run, but pull the updated run-nox manifest"
+        )
         stored = rpc_hex(probe, "eth_getStorageAt", [contracts[name], IMPL_SLOT, block])
         if len(stored) != 66 or stored[-40:] != implementation[2:]:
+            if advisory:
+                warn(stale)
+                continue
             fail(f"{name} EIP-1967 implementation does not match the deployment")
-        verify_code(
-            probe,
-            implementation,
-            implementation_hashes.get(name),
-            block,
-            f"{name} implementation",
-        )
+        label = f"{name} implementation"
+        expected_hash = implementation_hashes.get(name)
+        if not code_matches(probe, implementation, expected_hash, block, label):
+            if advisory:
+                warn(stale)
+                continue
+            fail(f"{label} runtime code does not match the committed deployment")
     return contracts
 
 
@@ -339,7 +361,7 @@ def validate_common(
     if int(rpc_hex(probe, "eth_chainId", []), 16) != chain_id:
         fail("RPC chain does not match the committed deployment")
     block = rpc_hex(probe, "eth_blockNumber", [])
-    contracts = verify_deployment(deployment, probe, block)
+    contracts = verify_deployment(deployment, probe, block, role)
     if address(config.get("registry_contract_address"), "registry_contract_address") != contracts["noxRegistry"]:
         fail("registry_contract_address must equal the committed deployment")
     return contracts, probe, block

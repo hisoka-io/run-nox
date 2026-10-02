@@ -103,13 +103,32 @@ The checked-in templates target Arbitrum Sepolia:
 | Benchmark mode | `false` |
 | Native price asset | `ethereum`, 18 decimals |
 
-`configs/arbitrum-sepolia.deployment.json` is generated from the contracts deploy record and carries the
+`configs/arbitrum-sepolia.deployment.json` is generated from the contracts deploy record by
+`scripts/make-deployment-manifest.py` and carries the
 registry and paid-execution addresses, registry start block, runtime-code hashes, proxy implementation slots and
 hashes, fee-asset list, and image digests. Copy it to the ignored `deployment.json` path before Compose startup.
 Preflight compares the role config and both runtime image digests to that record, verifies the configured
 RPC chain, checks every recorded runtime `codeHash` through `eth_getProof`, verifies each proxy implementation,
 checks EntryPoint, sandbox, adapter, BundleExecutor, RewardPool role and asset wiring, and compares token
 `decimals()` on chain. Do not infer or substitute an address or price mapping.
+
+### After a Contract Upgrade
+
+Preflight compares each upgradeable contract's live implementation with the manifest. After a governance upgrade
+of `NoxRegistry` or `NoxRewardPool`, `docker compose up` fails on every node until the manifest is updated.
+Running containers keep running. A `DarkPool` upgrade only prints a warning on relays, which never call it, and
+still blocks exits. Maintainers finish every upgrade by regenerating the manifest from the new deploy record:
+
+```bash
+python3 scripts/make-deployment-manifest.py PATH/TO/deploy-record/deployment.json \
+  --nox-image "$NOX_IMAGE" --preflight-image "$NOX_PREFLIGHT_IMAGE" \
+  --check-rpc https://arbitrum-sepolia-rpc.publicnode.com \
+  --out configs/arbitrum-sepolia.deployment.json
+bash scripts/test-preflight.sh
+```
+
+`--check-rpc` runs the same on-chain checks as preflight before the file is written. After the change merges,
+operators run `git pull` and copy the manifest to `deployment.json` again.
 
 The retired April 2026 registry exposes an older profile ABI and is not compatible with the current complete
 topology verification. Registry, indexer, SDK, node image, and operator manifest roll out as one release.
