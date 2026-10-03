@@ -4,7 +4,7 @@ This repository is the canonical operator kit for a [NOX](https://github.com/his
 
 ## Requirements
 
-- Docker Engine 20.10 or newer and Docker Compose v2
+- Docker Engine 20.10 or newer and Docker Compose v2.20 or newer
 - Python 3.11 or newer for TOML preflight validation
 - A public IPv4 address with TCP ports `15000` (libp2p) and `15001` (metrics, read-only) open
 - An Arbitrum Sepolia RPC endpoint. Exits need one that serves `eth_simulateV1`, such as
@@ -46,8 +46,9 @@ cd run-nox
 cp configs/arbitrum-sepolia.deployment.json deployment.json
 export NOX_IMAGE="$(python3 -c 'import json; print(json.load(open("deployment.json"))["release"]["noxImage"])')"
 export NOX_PREFLIGHT_IMAGE="$(python3 -c 'import json; print(json.load(open("deployment.json"))["release"]["preflightImage"])')"
-docker run --rm "$NOX_IMAGE" keygen > .env
+docker run --rm "$NOX_IMAGE" nox keygen > .env
 chmod 600 .env
+grep -c '^NOX__' .env   # must print 3
 cp configs/relay.toml config.toml
 set -a
 . ./.env
@@ -68,15 +69,19 @@ An exit additionally requires:
 - A funded secp256k1 wallet in `NOX__ETH_WALLET_PRIVATE_KEY`
 - A price source for every configured fee asset. The bundled price server serves `ethereum`, `usd-coin` and
   `bitcoin`; the template values SOKA through `usd-coin`
-- An RPC endpoint that serves `eth_simulateV1`. `https://sepolia-rollup.arbitrum.io/rpc` does not (it answers
-  `-32603 method handler crashed`), so every paid transaction would be rejected. The template uses
-  `https://arbitrum-sepolia-rpc.publicnode.com`
+- An RPC endpoint that serves `eth_simulateV1`; without it every paid transaction is rejected. The template uses
+  `https://arbitrum-sepolia-rpc.publicnode.com`, as the Hisoka exits do. `https://sepolia-rollup.arbitrum.io/rpc`
+  answered `-32603 method handler crashed` during the September 2026 cutover but simulated a recorded paid
+  transaction correctly on 2026-10-02. If you use it, watch the exit logs for simulation errors
 
 The exit template already carries the committed `NoxEntryPoint`, `NoxRewardPool`, `HowlPaymentAdapter` and SOKA
-fee-asset values:
+fee-asset values. The price server belongs to the Compose `exit` profile, so an exit enables that profile once in
+`.env`; every later `docker compose` command (`up`, `ps`, `logs`, `down`) then includes it. An exit set up before
+the profile existed must add the same line, or `docker compose up` starts it without a price server:
 
 ```bash
 cp configs/exit.toml config.toml
+echo 'COMPOSE_PROFILES=exit' >> .env
 set -a
 . ./.env
 set +a
@@ -86,7 +91,34 @@ curl --fail http://127.0.0.1:15004/health
 curl --fail http://127.0.0.1:15001/topology
 ```
 
-Never expose the price server publicly. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
+Never expose the price server publicly: Compose binds it to `127.0.0.1`. Relays do not run it. The node starts
+after the price server container without waiting for a fresh price, so a price-API outage does not keep an exit
+off the mixnet; the exit refuses paid requests until it can read fresh prices. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
+
+### Claiming Exit Credit
+
+Exit credit accrues in `NoxRewardPool` to the exit wallet, and only that wallet can claim it with
+`claimExitCredit(asset, recipient, amount)`. **Stop the node before you claim and start it again afterwards; never
+claim while it runs.** The node reads its wallet nonce when it starts, so any transaction sent from the exit wallet
+by another tool while the node runs leaves the node with a stale nonce. Its next paid submission then stays stuck
+in the outbox and blocks later ones, and a restart does not clear it. The same applies to any other transaction
+from the exit wallet, such as moving funds.
+
+```bash
+curl --fail --silent http://127.0.0.1:15001/metrics | grep '^nox_eth_tx_pending '   # wait until it reads 0
+docker compose stop nox
+set -a; . ./.env; set +a
+POOL=0xA487BAa4f2C3fAA01C70066EE88b6F7fD6f1361D
+SOKA=0x0F69cf1c9F4FF72471701036dd789c934458e630
+RPC=https://arbitrum-sepolia-rpc.publicnode.com
+EXIT=$(sed -n 's/^# Address (for registration): //p' .env)
+cast call "$POOL" 'claimableExit(address,address)(uint256)' "$EXIT" "$SOKA" --rpc-url "$RPC"
+cast send "$POOL" 'claimExitCredit(address,address,uint256)' "$SOKA" RECIPIENT AMOUNT_WEI \
+  --private-key "$NOX__ETH_WALLET_PRIVATE_KEY" --rpc-url "$RPC"
+docker compose up -d
+```
+
+`cast send` waits for the receipt. Start the node only after the claim succeeded; on start it reads the new nonce.
 
 ## Target Network Configuration
 
@@ -98,13 +130,32 @@ The checked-in templates target Arbitrum Sepolia:
 | Benchmark mode | `false` |
 | Native price asset | `ethereum`, 18 decimals |
 
-`configs/arbitrum-sepolia.deployment.json` is generated from the contracts deploy record and carries the
+`configs/arbitrum-sepolia.deployment.json` is generated from the contracts deploy record by
+`scripts/make-deployment-manifest.py` and carries the
 registry and paid-execution addresses, registry start block, runtime-code hashes, proxy implementation slots and
 hashes, fee-asset list, and image digests. Copy it to the ignored `deployment.json` path before Compose startup.
 Preflight compares the role config and both runtime image digests to that record, verifies the configured
 RPC chain, checks every recorded runtime `codeHash` through `eth_getProof`, verifies each proxy implementation,
 checks EntryPoint, sandbox, adapter, BundleExecutor, RewardPool role and asset wiring, and compares token
 `decimals()` on chain. Do not infer or substitute an address or price mapping.
+
+### After a Contract Upgrade
+
+Preflight compares each upgradeable contract's live implementation with the manifest. After a governance upgrade
+of `NoxRegistry` or `NoxRewardPool`, `docker compose up` fails on every node until the manifest is updated.
+Running containers keep running. A `DarkPool` upgrade only prints a warning on relays, which never call it, and
+still blocks exits. Maintainers finish every upgrade by regenerating the manifest from the new deploy record:
+
+```bash
+python3 scripts/make-deployment-manifest.py PATH/TO/deploy-record/deployment.json \
+  --nox-image "$NOX_IMAGE" --preflight-image "$NOX_PREFLIGHT_IMAGE" \
+  --check-rpc https://arbitrum-sepolia-rpc.publicnode.com \
+  --out configs/arbitrum-sepolia.deployment.json
+bash scripts/test-preflight.sh
+```
+
+`--check-rpc` runs the same on-chain checks as preflight before the file is written. After the change merges,
+operators run `git pull` and copy the manifest to `deployment.json` again.
 
 The retired April 2026 registry exposes an older profile ABI and is not compatible with the current complete
 topology verification. Registry, indexer, SDK, node image, and operator manifest roll out as one release.
@@ -133,9 +184,9 @@ Exit token entries are an allowlist. Each configured address must appear in the 
 match on-chain decimals, and have explicit symbol and oracle identifiers in operator config. An unconfigured token
 is rejected rather than priced with a fallback.
 
-The checked-in 12,000,000 transaction-gas ceiling covers the measured Howl EntryPoint plan of 10,273,982 gas
-after the configured 20% estimate buffer. Operators must remeasure every enabled payment adapter and action class,
-then price the full signed reservation. `quote_max_pending_sponsored_gas` remains the aggregate exposure limit,
+The checked-in 20,000,000 transaction-gas ceiling (`quote_maximum_transaction_gas`) leaves headroom over a
+Howl-paid execution, which needs a gas limit of about 10.8M on Arbitrum because payment and action gas are
+reserved up front. Operators must remeasure every enabled payment adapter and action class, then price the full signed reservation. `quote_max_pending_sponsored_gas` remains the aggregate exposure limit,
 so it can reject a quote even when that quote is below the per-transaction ceiling.
 
 ## Ports
@@ -144,9 +195,9 @@ so it can reject a quote even when that quote is below the per-transaction ceili
 |---|---|---|
 | `15000/tcp` | libp2p | Public |
 | `15001/tcp` | Metrics and topology (read-only) | Public: the indexer probes it |
-| `15002/tcp` | Client ingress | Entry nodes only |
-| `15003/tcp` | Topology API | Seed nodes only |
-| `15004/tcp` | Price server | Local only |
+| `15002/tcp` | Client ingress | Off in the templates. Entry nodes only, behind an https proxy |
+| `15003/tcp` | Topology API | Off in the templates |
+| `15004/tcp` | Price server | Exits only, bound to `127.0.0.1` |
 
 `metrics_port` must equal `p2p_port + 1`. The Hisoka indexer derives the metrics URL from your registered
 multiaddr (TCP port + 1) and polls `/topology` and `/metrics/json` there. If it cannot reach the port, the seed
@@ -158,8 +209,9 @@ events; the admin write endpoint exists only in `benchmark_mode`, which prefligh
 ```bash
 docker compose ps
 docker compose logs --tail 100 nox
-docker compose logs --tail 100 price-server
 curl --fail http://127.0.0.1:15001/topology
+# Exits only:
+docker compose logs --tail 100 price-server
 curl --fail http://127.0.0.1:15004/health
 ```
 

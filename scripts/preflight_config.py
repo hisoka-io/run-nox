@@ -39,12 +39,20 @@ REQUIRED_CONTRACTS = (
     "stakingToken",
 )
 PROXIES = ("darkPool", "noxRegistry", "noxRewardPool")
+# Relays never call DarkPool, which is upgraded on its own schedule. For a relay a
+# DarkPool implementation change is reported but does not block startup; exits,
+# which submit DarkPool-bound transactions, still fail closed.
+RELAY_ADVISORY_PROXIES = ("darkPool",)
 USER_AGENT = "run-nox-preflight/1"
 
 
 def fail(message: str) -> NoReturn:
     print(message, file=sys.stderr)
     raise SystemExit(1)
+
+
+def warn(message: str) -> None:
+    print(f"warning: {message}", file=sys.stderr)
 
 
 def load_json(path: Path, label: str) -> dict[str, object]:
@@ -136,6 +144,34 @@ def positive(source: dict[str, object], field: str) -> int:
     return value
 
 
+# Node defaults (nox-node config.rs) when neither TOML nor NOX__ env sets a port.
+DEFAULT_PORTS = {"p2p_port": 9000, "metrics_port": 9090}
+
+
+def effective_port(config: dict[str, object], field: str) -> int:
+    """Return the port the node will use: NOX__<FIELD> overrides TOML, which overrides the default."""
+    override = os.environ.get(f"NOX__{field.upper()}")
+    if override is not None:
+        if re.fullmatch(r"[0-9]{1,5}", override) is None:
+            fail(f"NOX__{field.upper()} must be a TCP port number")
+        value: object = int(override)
+    else:
+        value = config.get(field, DEFAULT_PORTS[field])
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 65535:
+        fail(f"{field} must be a TCP port in 1..=65535")
+    return value
+
+
+def validate_ports(config: dict[str, object]) -> None:
+    p2p_port = effective_port(config, "p2p_port")
+    metrics_port = effective_port(config, "metrics_port")
+    if metrics_port != p2p_port + 1:
+        fail(
+            "metrics_port must equal p2p_port + 1: the indexer probes the registered "
+            "multiaddr port + 1, so any other value lists the node as offline"
+        )
+
+
 class Rpc:
     def __init__(self, url: str) -> None:
         self.url = url
@@ -218,9 +254,9 @@ def address_word(value: str) -> str:
     return "0" * 24 + value[2:]
 
 
-def verify_code(
+def code_matches(
     probe: Rpc, target: str, expected: object, block: str, label: str
-) -> None:
+) -> bool:
     deployed = rpc_hex(probe, "eth_getCode", [target, block])
     if deployed == "0x" or not any(character != "0" for character in deployed[2:]):
         fail(f"{label} has no code on the configured chain")
@@ -228,12 +264,18 @@ def verify_code(
     if not isinstance(proof, dict):
         fail(f"{label} eth_getProof result must be an object")
     actual = code_hash(proof.get("codeHash"), f"{label} on-chain codeHash")
-    if actual != code_hash(expected, f"deployment {label} code hash"):
+    return actual == code_hash(expected, f"deployment {label} code hash")
+
+
+def verify_code(
+    probe: Rpc, target: str, expected: object, block: str, label: str
+) -> None:
+    if not code_matches(probe, target, expected, block, label):
         fail(f"{label} runtime code does not match the committed deployment")
 
 
 def verify_deployment(
-    deployment: dict[str, object], probe: Rpc, block: str
+    deployment: dict[str, object], probe: Rpc, block: str, role: str
 ) -> dict[str, str]:
     raw_contracts = mapping(deployment.get("contracts"), "deployment contracts")
     hashes = mapping(deployment.get("contractCodeHashes"), "contractCodeHashes")
@@ -255,16 +297,24 @@ def verify_deployment(
     for name in PROXIES:
         proxy = mapping(slots.get(name), f"proxySlots.{name}")
         implementation = address(proxy.get("impl"), f"proxySlots.{name}.impl")
+        advisory = role == "relay" and name in RELAY_ADVISORY_PROXIES
+        stale = (
+            f"{name} was upgraded after the committed deployment manifest; "
+            "a relay can run, but pull the updated run-nox manifest"
+        )
         stored = rpc_hex(probe, "eth_getStorageAt", [contracts[name], IMPL_SLOT, block])
         if len(stored) != 66 or stored[-40:] != implementation[2:]:
+            if advisory:
+                warn(stale)
+                continue
             fail(f"{name} EIP-1967 implementation does not match the deployment")
-        verify_code(
-            probe,
-            implementation,
-            implementation_hashes.get(name),
-            block,
-            f"{name} implementation",
-        )
+        label = f"{name} implementation"
+        expected_hash = implementation_hashes.get(name)
+        if not code_matches(probe, implementation, expected_hash, block, label):
+            if advisory:
+                warn(stale)
+                continue
+            fail(f"{label} runtime code does not match the committed deployment")
     return contracts
 
 
@@ -288,6 +338,7 @@ def validate_common(
         fail("chain_id and chain_start_block must equal the committed deployment")
     if config.get("benchmark_mode") is not False:
         fail("benchmark_mode must be false")
+    validate_ports(config)
     if config.get("chain_data_fee_mode") != "rpc_gas_estimate_includes_data_fee":
         fail("chain_data_fee_mode must use the verified RPC total-gas policy")
     if config.get("native_asset_price_id") != "ethereum" or config.get("native_asset_decimals") != 18:
@@ -310,7 +361,7 @@ def validate_common(
     if int(rpc_hex(probe, "eth_chainId", []), 16) != chain_id:
         fail("RPC chain does not match the committed deployment")
     block = rpc_hex(probe, "eth_blockNumber", [])
-    contracts = verify_deployment(deployment, probe, block)
+    contracts = verify_deployment(deployment, probe, block, role)
     if address(config.get("registry_contract_address"), "registry_contract_address") != contracts["noxRegistry"]:
         fail("registry_contract_address must equal the committed deployment")
     return contracts, probe, block

@@ -6,9 +6,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: NOX Version
-      description: "Run `docker run --rm ghcr.io/hisoka-io/nox:0.2.2-testnet --version` or check X-Nox-Version header"
-      placeholder: "0.2.2-testnet"
+      label: NOX Image
+      description: "The image digest you run (`echo \"$NOX_IMAGE\"`, or `docker inspect --format '{{.Config.Image}}' nox-node`). The version string alone does not identify a release."
+      placeholder: "ghcr.io/hisoka-io/nox@sha256:..."
     validations:
       required: true
 

@@ -5,7 +5,8 @@
 #
 # Setup:
 #   1. Copy this file: cp configs/exit.toml config.toml
-#   2. Private keys are loaded from .env (generate with `nox keygen`)
+#   2. Private keys are loaded from .env. Generate it with
+#      docker run --rm "$NOX_IMAGE" nox keygen > .env   (see REGISTRATION.md)
 #   3. Fund your ETH wallet with Arb Sepolia ETH (see REGISTRATION.md)
 #
 # Deployment: 2026-09-25 (configs/arbitrum-sepolia.deployment.json). The April
@@ -15,8 +16,9 @@
 
 # Ethereum RPC -used for topology sync, paid-execution simulation AND
 # transaction submission. It MUST support eth_simulateV1: without it every paid
-# transaction is rejected. https://sepolia-rollup.arbitrum.io/rpc does NOT
-# (it returns -32603 "method handler crashed"); publicnode does.
+# transaction is rejected. publicnode is what the Hisoka exits use.
+# https://sepolia-rollup.arbitrum.io/rpc returned -32603 "method handler
+# crashed" in September 2026 but simulated correctly on 2026-10-02.
 eth_rpc_url = "https://arbitrum-sepolia-rpc.publicnode.com"
 
 # Chain ID: 421614 = Arbitrum Sepolia

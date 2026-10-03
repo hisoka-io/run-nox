@@ -58,6 +58,21 @@ if "source: ./config.toml" not in nox or "target: /etc/nox/config.toml" not in n
     raise SystemExit("nox does not mount the operator configuration explicitly")
 if nox.count("create_host_path: false") != 1:
     raise SystemExit("nox can create an empty configuration path")
+
+price_server = service("price-server")
+if 'profiles: ["exit"]' not in price_server:
+    raise SystemExit("price-server must run only under the exit profile")
+if "PRICE_SERVER_BIND=127.0.0.1" not in price_server:
+    raise SystemExit("price-server must bind to loopback")
+optional_price = (
+    "price-server:\n"
+    "        condition: service_started\n"
+    "        required: false"
+)
+if optional_price not in nox:
+    raise SystemExit("nox must not wait for a healthy price server, and relays run without one")
+if "service_healthy" in nox:
+    raise SystemExit("nox must not wait for a healthy price server")
 PY
 
 python3 - "$repo_dir/configs" <<'PY'
@@ -96,6 +111,15 @@ if {asset.lower() for asset in adapter["fee_assets"]} != fee_assets:
     raise SystemExit("configs/exit.toml adapter fee_assets do not match the committed feeAssets")
 PY
 
+# The committed manifest carries every field the generator reads, so
+# regenerating it from itself must reproduce it byte for byte.
+manifest="$repo_dir/configs/arbitrum-sepolia.deployment.json"
+release_image() {
+  python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["release"][sys.argv[2]])' "$manifest" "$1"
+}
+cmp -s "$manifest" <(python3 "$repo_dir/scripts/make-deployment-manifest.py" "$manifest" \
+  --nox-image "$(release_image noxImage)" --preflight-image "$(release_image preflightImage)")
+
 relay_config="$(mktemp)"
 sed \
   -e 's/^registry_contract_address = .*/registry_contract_address = "0x5555555555555555555555555555555555555555"/' \
@@ -125,6 +149,24 @@ if python3 "$repo_dir/scripts/preflight_config.py" auto "$relay_config" "$deploy
   echo "compose preflight accepted the test-only RPC fixture" >&2
   exit 1
 fi
+
+moved_metrics_config="$(mktemp)"
+sed 's/^metrics_port = .*/metrics_port = 15005/' "$relay_config" >"$moved_metrics_config"
+if "$repo_dir/scripts/preflight.sh" relay "$moved_metrics_config" "$image" "$deployment_fixture" >/dev/null 2>&1; then
+  echo "relay preflight accepted a metrics_port other than p2p_port + 1" >&2
+  exit 1
+fi
+moved_both_config="$(mktemp)"
+sed -e 's/^p2p_port = .*/p2p_port = 15100/' -e 's/^metrics_port = .*/metrics_port = 15101/' \
+  "$relay_config" >"$moved_both_config"
+"$repo_dir/scripts/preflight.sh" relay "$moved_both_config" "$image" "$deployment_fixture" >/dev/null
+if NOX__P2P_PORT=15200 "$repo_dir/scripts/preflight.sh" relay "$relay_config" "$image" "$deployment_fixture" >/dev/null 2>&1; then
+  echo "relay preflight ignored a NOX__P2P_PORT override that breaks p2p_port + 1" >&2
+  exit 1
+fi
+NOX__P2P_PORT=15200 NOX__METRICS_PORT=15201 \
+  "$repo_dir/scripts/preflight.sh" relay "$relay_config" "$image" "$deployment_fixture" >/dev/null
+rm -f "$moved_metrics_config" "$moved_both_config"
 
 wrong_asset_config="$(mktemp)"
 exit_config="$(mktemp)"
@@ -196,6 +238,44 @@ if "$repo_dir/scripts/preflight.sh" relay "$relay_config" "$image" "$deployment_
   exit 1
 fi
 NOX__ROUTING_PRIVATE_KEY="$valid_routing_key"
+
+upgraded_dir="$(mktemp -d)"
+python3 - "$deployment_fixture" "$upgraded_dir" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+source = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+out = Path(sys.argv[2])
+cases = {
+    "darkpool-impl": ("proxySlots", "darkPool", "impl", "0x9999999999999999999999999999999999999999"),
+    "darkpool-hash": ("proxyImplementationCodeHashes", "darkPool", None, "0x" + "e" * 64),
+    "registry-impl": ("proxySlots", "noxRegistry", "impl", "0x9999999999999999999999999999999999999999"),
+}
+for name, (section, contract, field, value) in cases.items():
+    manifest = json.loads(json.dumps(source))
+    if field is None:
+        manifest[section][contract] = value
+    else:
+        manifest[section][contract][field] = value
+    (out / f"{name}.json").write_text(json.dumps(manifest), encoding="utf-8")
+PY
+for upgraded in darkpool-impl darkpool-hash; do
+  if ! relay_warning="$("$repo_dir/scripts/preflight.sh" relay "$relay_config" "$image" "$upgraded_dir/$upgraded.json" 2>&1)"; then
+    echo "relay preflight failed on a DarkPool-only upgrade ($upgraded)" >&2
+    exit 1
+  fi
+  [[ "$relay_warning" == *"warning: darkPool was upgraded"* ]]
+  if "$repo_dir/scripts/preflight.sh" exit "$exit_config" "$image" "$upgraded_dir/$upgraded.json" >/dev/null 2>&1; then
+    echo "exit preflight accepted a DarkPool implementation outside the manifest ($upgraded)" >&2
+    exit 1
+  fi
+done
+if "$repo_dir/scripts/preflight.sh" relay "$relay_config" "$image" "$upgraded_dir/registry-impl.json" >/dev/null 2>&1; then
+  echo "relay preflight accepted a NoxRegistry implementation outside the manifest" >&2
+  exit 1
+fi
+rm -rf "$upgraded_dir"
 
 sed '/^quote_max_outstanding = /d' "$exit_config" >"$missing_quote_config"
 if "$repo_dir/scripts/preflight.sh" exit "$missing_quote_config" "$image" "$deployment_fixture" >/dev/null 2>&1; then

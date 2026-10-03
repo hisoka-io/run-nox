@@ -4,9 +4,10 @@
 # Quick start:
 #   1. cp configs/arbitrum-sepolia.deployment.json deployment.json
 #   2. Export NOX_IMAGE and NOX_PREFLIGHT_IMAGE from its "release" object.
-#   3. docker run --rm "$NOX_IMAGE" keygen > .env
+#   3. docker run --rm "$NOX_IMAGE" nox keygen > .env
 #   4. cp configs/relay.toml config.toml   # or configs/exit.toml
-#   5. docker compose up -d
+#   5. Exit only: echo 'COMPOSE_PROFILES=exit' >> .env   (adds the price server)
+#   6. docker compose up -d
 
 services:
   preflight:
@@ -54,16 +55,19 @@ services:
         max-size: "50m"
         max-file: "3"
 
+  # Exit nodes only. Relays never query prices (oracle_url = ""), so the price
+  # server runs only under the "exit" profile.
   price-server:
     image: ${NOX_IMAGE:?NOX_IMAGE must be an immutable ghcr.io/hisoka-io/nox digest}
     container_name: nox-price-server
+    profiles: ["exit"]
     user: "10001:10001"
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     entrypoint: ["price_server"]
     environment:
       - PRICE_SERVER_PORT=15004
-      - PRICE_SERVER_BIND=0.0.0.0
+      - PRICE_SERVER_BIND=127.0.0.1
       - RUST_LOG=info
     network_mode: host
     depends_on:
@@ -107,8 +111,12 @@ services:
     depends_on:
       preflight:
         condition: service_completed_successfully
+      # Start after the price server when the exit profile is active, but do
+      # not wait for a fresh price: a price-API outage must not keep the node
+      # off the mixnet. Relays run without the price server.
       price-server:
-        condition: service_healthy
+        condition: service_started
+        required: false
     restart: unless-stopped
     logging:
       driver: "json-file"
