@@ -30,7 +30,7 @@ mixnet.
 | `HowlPaymentAdapter` | `0xfC874B702F8D59B60B35582855505F4f60cE766D` |
 | SOKA (staking and fee asset, 18 decimals) | `0x0F69cf1c9F4FF72471701036dd789c934458e630` |
 | `chain_start_block` | `312414608` |
-| Nox image | `ghcr.io/hisoka-io/nox@sha256:3913b441f4ccd5e0f21b804af3845d8201326025b75c5f16c5407ed50ea4f31c` (`0.4.0-rc.1`) |
+| Nox image | `ghcr.io/hisoka-io/nox@sha256:ff24fd1fbdb05e739a6e06e75cc6aef8a2d77889e9626a5cad8562172605b201` (`0.4.0-rc.2`) |
 | Preflight image | `python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9` |
 
 The role templates in `configs/` already carry these values. The manifest is the source of truth: preflight
