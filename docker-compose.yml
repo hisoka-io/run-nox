@@ -195,7 +195,9 @@ services:
   # KPS entry sidecar: browsers (WebRTC) and native clients (QUIC) dial
   # <public ip>:15005:<certhash>; each stream is proxied to the node's loopback
   # ingress and topology API. The identity key (certhash = published address)
-  # lives in nox-kps-identity: back it up and never delete the volume.
+  # lives in nox-kps-identity: back it up and keep the volume. Create it once with
+  # `docker compose run --rm --no-deps nox-kps nox-kps init` and put the printed
+  # certhash in nox-kps.toml expected_certhash: `run` serves only that identity.
   nox-kps:
     # A default instead of ${...:?} keeps Compose working for operators without
     # the kps profile; with the profile, nox-kps-preflight rejects anything but
@@ -228,7 +230,8 @@ services:
       nox:
         condition: service_started
     restart: unless-stopped
-    stop_grace_period: 10s
+    # nox-kps [shutdown] grace_period_ms (10 s) + close_linger_ms (2 s) fit inside it.
+    stop_grace_period: 15s
     mem_limit: 512m
     cpus: 1.0
     logging:
@@ -239,7 +242,7 @@ services:
     healthcheck:
       test: ["CMD", "nox-kps", "healthcheck"]
       interval: 15s
-      timeout: 3s
+      timeout: 6s
       retries: 3
       start_period: 10s
 

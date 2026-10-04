@@ -92,6 +92,8 @@ if "nox-kps-bundles:/var/lib/nox-kps/keccak:ro" not in kps or "create_host_path:
     raise SystemExit("nox-kps must mount bundles read-only and fail closed without nox-kps.toml")
 if 'test: ["CMD", "nox-kps", "healthcheck"]' not in kps or "mem_limit: 512m" not in kps:
     raise SystemExit("nox-kps needs its healthcheck and a memory limit")
+if "stop_grace_period: 15s" not in kps or "timeout: 6s" not in kps:
+    raise SystemExit("nox-kps needs 15 s to drain (shutdown grace + linger) and 6 s per healthcheck")
 kps_preflight = service("nox-kps-preflight")
 if "image: ${NOX_PREFLIGHT_IMAGE:?" not in kps_preflight or kps_preflight.count("create_host_path: false") != 3:
     raise SystemExit("nox-kps-preflight must use the pinned preflight image and fail closed on missing files")
@@ -129,9 +131,15 @@ def free_udp_port() -> int:
 
 port = free_udp_port()
 listen_line = f'listen = "0.0.0.0:{port}"'
-good_kps = template.replace('public_ips = ["203.0.113.10"]', 'public_ips = ["3.239.73.249"]').replace(
-    'listen = "[::]:15005"', listen_line
+certhash = "uEi" + "A" * 44
+certhash_line = f'expected_certhash = "{certhash}"'
+good_kps = (
+    template.replace('advertise = ["203.0.113.10"]', 'advertise = ["3.239.73.249"]')
+    .replace('listen = "[::]:15005"', listen_line)
+    .replace('expected_certhash = ""', certhash_line)
 )
+if good_kps.count(certhash_line) != 1 or good_kps.count(listen_line) != 1:
+    raise SystemExit("configs/nox-kps.toml no longer has the listen, advertise and expected_certhash lines the README edits")
 header_block = '\n[ingress]\nclient_ip_header = "x-real-ip"\n'
 good_node = (
     relay.replace("ingress_port = 0", "ingress_port = 15002").replace("topology_api_port = 0", "topology_api_port = 15003")
@@ -154,10 +162,25 @@ if ok.returncode != 0 or "nox-kps preflight passed" not in ok.stdout:
 ipv6_ok = run(good_kps.replace(listen_line, f'listen = "[::]:{port}"'), good_node)
 if ipv6_ok.returncode != 0:
     raise SystemExit(f"dual-stack listen rejected: {ipv6_ok.stderr}")
+with_address = run(good_kps.replace('node_address = ""', 'node_address = "0x862D6B1105bdE9d64dC5182fe3CD9d09F6F37463"'), good_node)
+if with_address.returncode != 0:
+    raise SystemExit(f"a registered node_address was rejected: {with_address.stderr}")
+valid = 3
 
+sectioned = """[kps]
+listen = "0.0.0.0:15005"
+public_ips = ["3.239.73.249"]
+[upstreams]
+ingress = "http://127.0.0.1:15002"
+"""
 cases = {
     "the template's documentation IP": (
-        template.replace('listen = "[::]:15005"', listen_line), good_node, image, "not a public IP"),
+        template.replace('listen = "[::]:15005"', listen_line).replace('expected_certhash = ""', certhash_line),
+        good_node, image, "not a public IP"),
+    "the template before nox-kps init": (
+        good_kps.replace(certhash_line, 'expected_certhash = ""'), good_node, image, "nox-kps nox-kps init"),
+    "a malformed expected_certhash": (
+        good_kps.replace(certhash_line, 'expected_certhash = "uEiShort"'), good_node, image, "expected_certhash"),
     "a mutable image tag": (good_kps, good_node, "ghcr.io/hisoka-io/nox-kps:latest", "immutable"),
     "the Compose placeholder image": (
         good_kps, good_node, "ghcr.io/hisoka-io/nox-kps:set-NOX_KPS_IMAGE-to-a-digest", "immutable"),
@@ -167,19 +190,29 @@ cases = {
         good_kps, good_node.replace('client_ip_header = "x-real-ip"', 'client_ip_header = "x-forwarded-for"'),
         image, "client_ip_header"),
     "a node without the header": (good_kps, good_node.replace(header_block, "\n"), image, "client_ip_header"),
+    "an upstream with a URL scheme": (
+        good_kps.replace('"127.0.0.1:15002"', '"http://127.0.0.1:15002"'), good_node, image, "without a scheme"),
     "a non-loopback upstream": (
-        good_kps.replace("http://127.0.0.1:15002", "http://10.0.0.5:15002"), good_node, image, "127.0.0.1"),
+        good_kps.replace('"127.0.0.1:15002"', '"10.0.0.5:15002"'), good_node, image, "loopback"),
     "an upstream on the wrong port": (
-        good_kps.replace("http://127.0.0.1:15002", "http://127.0.0.1:15009"), good_node, image, "ingress_port"),
+        good_kps.replace('"127.0.0.1:15002"', '"127.0.0.1:15009"'), good_node, image, "ingress_port"),
     "a topology upstream on no topology port": (
-        good_kps.replace("http://127.0.0.1:15003", "http://127.0.0.1:15009"), good_node, image, "serves no topology"),
-    "a public metrics listener": (
-        good_kps.replace('listen = "127.0.0.1:15006"', 'listen = "0.0.0.0:15006"'), good_node, image, "loopback"),
+        good_kps.replace('"127.0.0.1:15003"', '"127.0.0.1:15009"'), good_node, image, "serves no topology"),
+    "a public admin listener": (
+        good_kps.replace('admin_listen = "127.0.0.1:15006"', 'admin_listen = "0.0.0.0:15006"'), good_node, image,
+        "admin_listen"),
     "a bind to a specific address": (
         good_kps.replace(listen_line, f'listen = "3.239.73.249:{port}"'), good_node, image, "0.0.0.0"),
     "an identity outside the volume": (
-        good_kps.replace("/var/lib/nox-kps/kps.key", "/tmp/kps.key"), good_node, image, "identity_key_file"),
-    "an unknown section": (good_kps + "\n[extra]\na = 1\n", good_node, image, "unknown sections"),
+        good_kps.replace('"/var/lib/nox-kps/kps.key"', '"/tmp/kps.key"'), good_node, image, "key_file"),
+    "a private advertise override": (
+        good_kps + "allow_private_advertise = true\n", good_node, image, "allow_private_advertise"),
+    "a malformed node_address": (
+        good_kps.replace('node_address = ""', 'node_address = "0x1234"'), good_node, image, "node_address"),
+    "a bundle dir outside the volume": (
+        good_kps.replace('"/var/lib/nox-kps/keccak"', '"/tmp/keccak"'), good_node, image, "keccak_dir"),
+    "an unknown key": (good_kps + "public_ips = []\n", good_node, image, "does not know"),
+    "the sectioned schema": (sectioned, good_node, image, "does not know"),
     "a KPS port equal to a node port": (
         good_kps.replace(listen_line, 'listen = "0.0.0.0:15001"'), good_node, image, "collides"),
 }
@@ -194,7 +227,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as busy:
     result = run(good_kps.replace(listen_line, f'listen = "0.0.0.0:{busy_port}"'), good_node)
     if result.returncode == 0 or "already in use" not in result.stderr:
         raise SystemExit(f"nox-kps preflight accepted a UDP port held by another process: {result.stderr}")
-print(f"nox-kps preflight: 2 valid configs passed, {len(cases) + 1} invalid configs rejected")
+print(f"nox-kps preflight: {valid} valid configs passed, {len(cases) + 1} invalid configs rejected")
 PY
 
 python3 - "$repo_dir/configs" <<'PY'

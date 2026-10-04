@@ -157,33 +157,47 @@ You need:
    sed -i 's/"203.0.113.10"/"<your public IP>"/' nox-kps.toml
    ```
 
-3. Enable the profile and start it (`COMPOSE_PROFILES=exit,kps` on an exit):
+   Optionally set `node_address` to your registered node address; `/metadata.json` shows it.
+
+3. Enable the profile and create the identity key once. The certhash it prints is the stable part of your
+   KPS address:
 
    ```bash
    export NOX_KPS_IMAGE='ghcr.io/hisoka-io/nox-kps@sha256:<digest from the release record>'
-   echo 'COMPOSE_PROFILES=kps' >> .env
-   docker compose up -d
-   docker compose ps nox-kps            # healthy
-   docker compose exec nox-kps nox-kps address   # prints <public ip>:15005:<certhash>
+   echo 'COMPOSE_PROFILES=kps' >> .env   # COMPOSE_PROFILES=exit,kps on an exit
+   docker compose run --rm nox-kps-init
+   docker compose run --rm --no-deps nox-kps nox-kps init
    ```
 
-   `nox-kps-preflight` runs first and refuses to start the sidecar if the image is not a digest, the public IP is
-   missing or private, an upstream is not loopback, the ingress or topology port is disabled, the client IP
-   headers differ, the metrics listener is public, or another process holds UDP `15005`. `nox-kps-init` gives the
-   two `nox-kps` volumes to UID `10002`.
+   `nox-kps-init` gives the two `nox-kps` volumes to UID `10002`. `nox-kps init` writes the key to the
+   `nox-kps-identity` volume and prints `certhash: <certhash>`, your address and a line
+   `config line: expected_certhash = "<certhash>"`. Running `init` again leaves an existing key untouched.
 
-4. Note your KPS address, `<public ip>:15005:<certhash>`, and dial it from another network with a KPS client
-   (`@kpstreams/quic-client` or `@kpstreams/webrtc-client`), requesting `GET /health` and `GET /topology`.
-
-5. Back up the identity key. The certhash in your address is derived from it, and the key stays in the
-   `nox-kps-identity` volume across restarts and upgrades:
+4. Back up the key, then put the certhash in `nox-kps.toml`:
 
    ```bash
-   (umask 077; docker compose cp nox-kps:/var/lib/nox-kps/kps.key ./kps.key.backup)
+   (umask 077; docker compose run --rm --no-deps -T nox-kps cat /var/lib/nox-kps/kps.key > kps.key.backup)
+   sed -i 's/^expected_certhash = ""/expected_certhash = "<certhash>"/' nox-kps.toml
    ```
 
-   Store the copy with the node's other secrets. Never delete the `nox-kps-identity` volume: a new key changes
-   your address.
+   Store the backup with the node's other secrets and keep the `nox-kps-identity` volume: the certhash in your
+   address is derived from this key. `nox-kps run` serves only the identity whose certhash matches
+   `expected_certhash`, so a swapped or wrongly restored volume never answers under your published address.
+
+5. Start the sidecar and check it:
+
+   ```bash
+   docker compose up -d
+   docker compose ps nox-kps                        # healthy
+   docker compose exec nox-kps nox-kps address      # prints <public ip>:15005:<certhash>
+   ```
+
+   `nox-kps-preflight` runs first and starts the sidecar only when the image is a digest, the public IP is
+   set and public, `expected_certhash` holds a certhash, the upstreams are loopback on the enabled ingress and
+   topology ports, the client IP headers match, the admin listener is loopback, and UDP `15005` is free.
+
+   From another network, dial `<public ip>:15005:<certhash>` with a KPS client (`@kpstreams/quic-client` or
+   `@kpstreams/webrtc-client`) and request `GET /health` and `GET /topology`.
 
 6. Publish the address in the registry. `updateMetadataUrl` is self-service: it must be sent by your registered
    node address, which is the key in `NOX__ETH_WALLET_PRIVATE_KEY`. Import that key into an encrypted Foundry
@@ -198,7 +212,7 @@ You need:
      <node address> --rpc-url https://sepolia-rollup.arbitrum.io/rpc   # 4th value is your metadataUrl
    ```
 
-   The transaction costs about 130,000 gas. Publish only after step 4 succeeds from another network, and
+   The transaction costs about 130,000 gas. Publish only after step 5 succeeds from another network, and
    keep the public IP stable: the IP and certhash together are the address clients pin.
 
 To stop serving KPS, clear the published address first, then stop the sidecar. The identity volume stays, so
@@ -231,6 +245,9 @@ With plain `iptables`, put the rules in a script that a systemd oneshot unit run
 ```bash
 iptables -N NOX-FW 2>/dev/null || iptables -F NOX-FW
 iptables -A NOX-FW -i lo -j RETURN
+# one source may open 20 new KPS sessions per second (burst 40); its open sessions are unaffected
+iptables -A NOX-FW -p udp --dport 15005 -m conntrack --ctstate NEW -m hashlimit --hashlimit-mode srcip \
+  --hashlimit-above 20/second --hashlimit-burst 40 --hashlimit-name nox-kps-new -j DROP
 iptables -A NOX-FW -p udp --dport 15005 -j RETURN
 iptables -A NOX-FW -p tcp -m multiport --dports 15002,15003,15004,15006 -j DROP
 iptables -C INPUT -j NOX-FW 2>/dev/null || iptables -I INPUT 1 -j NOX-FW
