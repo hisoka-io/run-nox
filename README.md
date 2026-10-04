@@ -137,8 +137,9 @@ record that carries it names the `nox-kps` version in `release.noxKps`; check yo
 python3 -c 'import json; print(json.load(open("deployment.json"))["release"].get("noxKps"))'
 ```
 
-A version such as `0.1.0` means the pinned image serves KPS. `nox-kps-preflight` checks this, together with
-`nox-kps.toml` and `config.toml`, every time the sidecar starts.
+A version (`nox-kps` is versioned with the node release, for example `0.4.0-rc.5`) means the pinned image
+serves KPS. `nox-kps-preflight` checks this, together with `nox-kps.toml` and `config.toml`, every time the
+sidecar starts.
 
 You need:
 
