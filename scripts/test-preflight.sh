@@ -10,8 +10,8 @@ export NOX__P2P_PRIVATE_KEY="$(printf '22%.0s' {1..32})"
 export NOX__ETH_WALLET_PRIVATE_KEY="$(printf '33%.0s' {1..32})"
 
 [[ "$(grep -c 'user: "10001:10001"' "$repo_dir/docker-compose.yml")" -eq 2 ]]
-[[ "$(grep -c 'cap_drop: \["ALL"\]' "$repo_dir/docker-compose.yml")" -eq 6 ]]
-[[ "$(grep -c 'no-new-privileges:true' "$repo_dir/docker-compose.yml")" -eq 6 ]]
+[[ "$(grep -c 'cap_drop: \["ALL"\]' "$repo_dir/docker-compose.yml")" -eq 7 ]]
+[[ "$(grep -c 'no-new-privileges:true' "$repo_dir/docker-compose.yml")" -eq 7 ]]
 
 python3 - "$repo_dir/docker-compose.yml" <<'PY'
 from pathlib import Path
@@ -74,41 +74,64 @@ if optional_price not in nox:
 if "service_healthy" in nox:
     raise SystemExit("nox must not wait for a healthy price server")
 
-# Optional KPS entry: every nox-kps service is opt-in (profile "kps"), hardened,
-# and the sidecar starts only after its own preflight and the volume init.
-for name in ("nox-kps-preflight", "nox-kps-init", "nox-kps"):
+# Optional KPS entry: every nox-kps service is opt-in (profile "kps", or
+# "kps-admin" for one-off commands), hardened, and runs from the node's release
+# image (D-09: nox-kps ships in the node image). The sidecar starts only after
+# its own preflight and the volume init.
+profiles = {
+    "nox-kps-preflight": 'profiles: ["kps"]',
+    "nox-kps-init": 'profiles: ["kps", "kps-admin"]',
+    "nox-kps": 'profiles: ["kps"]',
+    "nox-kps-admin": 'profiles: ["kps-admin"]',
+}
+for name, profile in profiles.items():
     body = service(name)
-    if 'profiles: ["kps"]' not in body:
-        raise SystemExit(f"{name} must run only under the kps profile")
+    if profile not in body:
+        raise SystemExit(f"{name} must run only under {profile}")
     if 'cap_drop: ["ALL"]' not in body or "no-new-privileges:true" not in body or "read_only: true" not in body:
         raise SystemExit(f"{name} is not hardened (cap_drop ALL, no-new-privileges, read-only root)")
+    if name != "nox-kps-preflight" and "image: ${NOX_IMAGE:?" not in body:
+        raise SystemExit(f"{name} must run from the pinned node image NOX_IMAGE, which ships nox-kps")
+if "NOX_KPS_IMAGE" in compose:
+    raise SystemExit("nox-kps runs from NOX_IMAGE; a separate NOX_KPS_IMAGE is not part of the kit")
 kps = service("nox-kps")
 if 'user: "10002:10002"' not in kps or "network_mode: host" not in kps:
     raise SystemExit("nox-kps must run as UID 10002 on the host network (loopback upstreams)")
+if 'entrypoint: ["nox-kps"]' not in kps or 'command: ["run"]' not in kps:
+    raise SystemExit("nox-kps must run `nox-kps run`, not the image's default node command")
 for dependency in ("nox-kps-preflight", "nox-kps-init"):
     if f"{dependency}:\n        condition: service_completed_successfully" not in kps:
         raise SystemExit(f"nox-kps can start without {dependency}")
 if "nox-kps-bundles:/var/lib/nox-kps/keccak:ro" not in kps or "create_host_path: false" not in kps:
     raise SystemExit("nox-kps must mount bundles read-only and fail closed without nox-kps.toml")
 if 'test: ["CMD", "nox-kps", "healthcheck"]' not in kps or "mem_limit: 512m" not in kps:
-    raise SystemExit("nox-kps needs its healthcheck and a memory limit")
+    raise SystemExit("nox-kps needs its own healthcheck (the image default probes the node) and a memory limit")
 if "stop_grace_period: 15s" not in kps or "timeout: 6s" not in kps:
     raise SystemExit("nox-kps needs 15 s to drain (shutdown grace + linger) and 6 s per healthcheck")
 kps_preflight = service("nox-kps-preflight")
-if "image: ${NOX_PREFLIGHT_IMAGE:?" not in kps_preflight or kps_preflight.count("create_host_path: false") != 3:
+if "image: ${NOX_PREFLIGHT_IMAGE:?" not in kps_preflight or kps_preflight.count("create_host_path: false") != 4:
     raise SystemExit("nox-kps-preflight must use the pinned preflight image and fail closed on missing files")
+if "target: /etc/nox-release/deployment.json" not in kps_preflight or "- ${NOX_IMAGE:?" not in kps_preflight:
+    raise SystemExit("nox-kps-preflight must check NOX_IMAGE against the release record")
 if "env_file" in kps_preflight:
     raise SystemExit("nox-kps-preflight needs no secrets and must not load .env")
 init = service("nox-kps-init")
 if 'cap_add: ["CHOWN", "DAC_READ_SEARCH"]' not in init or "network_mode: none" not in init:
     raise SystemExit("nox-kps-init must keep only CHOWN and DAC_READ_SEARCH and run without a network")
-if "${NOX_KPS_IMAGE:?" in compose:
-    raise SystemExit("a required NOX_KPS_IMAGE would break Compose for operators without the kps profile")
+admin = service("nox-kps-admin")
+if 'user: "10002:10002"' not in admin or "network_mode: none" not in admin or "env_file" in admin:
+    raise SystemExit("nox-kps-admin must run as UID 10002 without a network or secrets")
+if "nox-kps-bundles:/var/lib/nox-kps/keccak\n" not in admin or "nox-kps-init:\n        condition: service_completed_successfully" not in admin:
+    raise SystemExit("nox-kps-admin must write bundles and run after the volume init")
+for name in ("nox-kps", "nox-kps-admin"):
+    if "NOX_KPS_CONFIG=/etc/nox-kps/config.toml" not in service(name):
+        raise SystemExit(f"{name} must read the mounted nox-kps.toml")
 PY
 
 # nox-kps preflight (scripts/preflight_kps.py): one valid config passes, each
 # unsafe or inconsistent one is rejected with an actionable message.
 python3 - "$repo_dir" <<'PY'
+import json
 import socket
 import subprocess
 import sys
@@ -118,7 +141,17 @@ from pathlib import Path
 repo = Path(sys.argv[1])
 work = Path(tempfile.mkdtemp())
 script = repo / "scripts" / "preflight_kps.py"
-image = "ghcr.io/hisoka-io/nox-kps@sha256:" + "ab" * 32
+# nox-kps runs from the node image of a release whose record names the nox-kps
+# version it ships (release.noxKps).
+image = "ghcr.io/hisoka-io/nox@sha256:" + "ab" * 32
+manifest = json.loads((repo / "configs" / "arbitrum-sepolia.deployment.json").read_text(encoding="utf-8"))
+manifest["release"]["noxImage"] = image
+manifest["release"]["noxKps"] = "0.1.0"
+deployment = json.dumps(manifest)
+without_kps = json.loads(deployment)
+del without_kps["release"]["noxKps"]
+bad_version = json.loads(deployment)
+bad_version["release"]["noxKps"] = "latest"
 template = (repo / "configs" / "nox-kps.toml").read_text(encoding="utf-8")
 relay = (repo / "configs" / "relay.toml").read_text(encoding="utf-8")
 
@@ -135,7 +168,7 @@ certhash = "uEi" + "A" * 44
 certhash_line = f'expected_certhash = "{certhash}"'
 good_kps = (
     template.replace('advertise = ["203.0.113.10"]', 'advertise = ["3.239.73.249"]')
-    .replace('listen = "[::]:15005"', listen_line)
+    .replace('listen = "0.0.0.0:15005"', listen_line)
     .replace('expected_certhash = ""', certhash_line)
 )
 if good_kps.count(certhash_line) != 1 or good_kps.count(listen_line) != 1:
@@ -147,17 +180,21 @@ good_node = (
 )
 
 
-def run(kps: str, node: str, kps_image: str = image) -> subprocess.CompletedProcess[str]:
+def run(
+    kps: str, node: str, kps_image: str = image, release: str = deployment
+) -> subprocess.CompletedProcess[str]:
     (work / "nox-kps.toml").write_text(kps, encoding="utf-8")
     (work / "config.toml").write_text(node, encoding="utf-8")
+    (work / "deployment.json").write_text(release, encoding="utf-8")
     return subprocess.run(
-        [sys.executable, str(script), str(work / "nox-kps.toml"), str(work / "config.toml"), kps_image],
+        [sys.executable, str(script), str(work / "nox-kps.toml"), str(work / "config.toml"),
+         str(work / "deployment.json"), kps_image],
         capture_output=True, text=True, check=False,
     )
 
 
 ok = run(good_kps, good_node)
-if ok.returncode != 0 or "nox-kps preflight passed" not in ok.stdout:
+if ok.returncode != 0 or "nox-kps 0.1.0 preflight passed" not in ok.stdout:
     raise SystemExit(f"valid nox-kps config rejected: {ok.stderr}")
 ipv6_ok = run(good_kps.replace(listen_line, f'listen = "[::]:{port}"'), good_node)
 if ipv6_ok.returncode != 0:
@@ -175,15 +212,17 @@ ingress = "http://127.0.0.1:15002"
 """
 cases = {
     "the template's documentation IP": (
-        template.replace('listen = "[::]:15005"', listen_line).replace('expected_certhash = ""', certhash_line),
+        template.replace('listen = "0.0.0.0:15005"', listen_line).replace('expected_certhash = ""', certhash_line),
         good_node, image, "not a public IP"),
     "the template before nox-kps init": (
-        good_kps.replace(certhash_line, 'expected_certhash = ""'), good_node, image, "nox-kps nox-kps init"),
+        good_kps.replace(certhash_line, 'expected_certhash = ""'), good_node, image, "nox-kps-admin init"),
     "a malformed expected_certhash": (
         good_kps.replace(certhash_line, 'expected_certhash = "uEiShort"'), good_node, image, "expected_certhash"),
-    "a mutable image tag": (good_kps, good_node, "ghcr.io/hisoka-io/nox-kps:latest", "immutable"),
-    "the Compose placeholder image": (
-        good_kps, good_node, "ghcr.io/hisoka-io/nox-kps:set-NOX_KPS_IMAGE-to-a-digest", "immutable"),
+    "a mutable image tag": (good_kps, good_node, "ghcr.io/hisoka-io/nox:latest", "immutable"),
+    "a separate nox-kps image": (
+        good_kps, good_node, "ghcr.io/hisoka-io/nox-kps@sha256:" + "ab" * 32, "ghcr.io/hisoka-io/nox@sha256"),
+    "a node image outside the release record": (
+        good_kps, good_node, "ghcr.io/hisoka-io/nox@sha256:" + "cd" * 32, "release.noxImage"),
     "a disabled node ingress": (
         good_kps, good_node.replace("ingress_port = 15002", "ingress_port = 0"), image, "ingress_port is 0"),
     "a mismatched client IP header": (
@@ -194,6 +233,12 @@ cases = {
         good_kps.replace('"127.0.0.1:15002"', '"http://127.0.0.1:15002"'), good_node, image, "without a scheme"),
     "a non-loopback upstream": (
         good_kps.replace('"127.0.0.1:15002"', '"10.0.0.5:15002"'), good_node, image, "loopback"),
+    "an upstream by name": (
+        good_kps.replace('"127.0.0.1:15002"', '"localhost:15002"'), good_node, image, "127.0.0.1:<port>"),
+    "an IPv6 loopback upstream": (
+        good_kps.replace('"127.0.0.1:15003"', '"[::1]:15003"'), good_node, image, "127.0.0.1:<port>"),
+    "an expected_certhash with spaces": (
+        good_kps.replace(certhash_line, f'expected_certhash = " {certhash} "'), good_node, image, "expected_certhash"),
     "an upstream on the wrong port": (
         good_kps.replace('"127.0.0.1:15002"', '"127.0.0.1:15009"'), good_node, image, "ingress_port"),
     "a topology upstream on no topology port": (
@@ -220,6 +265,15 @@ for label, (kps, node, kps_image, needle) in cases.items():
     result = run(kps, node, kps_image)
     if result.returncode == 0 or needle not in result.stderr:
         raise SystemExit(f"nox-kps preflight accepted {label}: rc={result.returncode} {result.stderr}")
+release_cases = {
+    "a release that ships no nox-kps": (json.dumps(without_kps), "release.noxKps is unset"),
+    "a release.noxKps that is not a version": (json.dumps(bad_version), "release.noxKps must be a version"),
+    "an unreadable deployment.json": ("{", "cannot be parsed"),
+}
+for label, (release, needle) in release_cases.items():
+    result = run(good_kps, good_node, image, release)
+    if result.returncode == 0 or needle not in result.stderr:
+        raise SystemExit(f"nox-kps preflight accepted {label}: rc={result.returncode} {result.stderr}")
 
 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as busy:
     busy.bind(("0.0.0.0", 0))
@@ -227,7 +281,10 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as busy:
     result = run(good_kps.replace(listen_line, f'listen = "0.0.0.0:{busy_port}"'), good_node)
     if result.returncode == 0 or "already in use" not in result.stderr:
         raise SystemExit(f"nox-kps preflight accepted a UDP port held by another process: {result.stderr}")
-print(f"nox-kps preflight: {valid} valid configs passed, {len(cases) + 1} invalid configs rejected")
+print(
+    f"nox-kps preflight: {valid} valid configs passed, "
+    f"{len(cases) + len(release_cases) + 1} invalid configs rejected"
+)
 PY
 
 python3 - "$repo_dir/configs" <<'PY'
@@ -272,8 +329,47 @@ manifest="$repo_dir/configs/arbitrum-sepolia.deployment.json"
 release_image() {
   python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["release"][sys.argv[2]])' "$manifest" "$1"
 }
+kps_version_args=()
+if kps_version="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["release"]["noxKps"])' "$manifest" 2>/dev/null)"; then
+  kps_version_args=(--nox-kps-version "$kps_version")
+fi
 cmp -s "$manifest" <(python3 "$repo_dir/scripts/make-deployment-manifest.py" "$manifest" \
-  --nox-image "$(release_image noxImage)" --preflight-image "$(release_image preflightImage)")
+  --nox-image "$(release_image noxImage)" --preflight-image "$(release_image preflightImage)" \
+  "${kps_version_args[@]}")
+
+# release.noxKps: the generator records the nox-kps version shipped in the node
+# image, and release validation accepts only a version there.
+kps_manifest="$(python3 "$repo_dir/scripts/make-deployment-manifest.py" "$manifest" \
+  --nox-image "$(release_image noxImage)" --preflight-image "$(release_image preflightImage)" \
+  --nox-kps-version 0.1.0)"
+[[ "$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["release"]["noxKps"])' "$kps_manifest")" == "0.1.0" ]]
+for bad_release in '"latest"' '1' 'misspelled'; do
+  if python3 - "$manifest" "$bad_release" "$repo_dir/scripts" <<'RELEASE' >/dev/null 2>&1
+import json
+import sys
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[3])
+import preflight_config
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+if sys.argv[2] == "misspelled":
+    manifest["release"]["noxKPS"] = "0.1.0"
+else:
+    manifest["release"]["noxKps"] = json.loads(sys.argv[2])
+preflight_config.validate_release(manifest, manifest["release"]["noxImage"], None)
+RELEASE
+  then
+    echo "release validation accepted release.noxKps case ${bad_release}" >&2
+    exit 1
+  fi
+done
+if python3 "$repo_dir/scripts/make-deployment-manifest.py" "$manifest" \
+  --nox-image "$(release_image noxImage)" --preflight-image "$(release_image preflightImage)" \
+  --nox-kps-version latest >/dev/null 2>&1; then
+  echo "manifest generator accepted a nox-kps version that is not a version" >&2
+  exit 1
+fi
 
 relay_config="$(mktemp)"
 sed \

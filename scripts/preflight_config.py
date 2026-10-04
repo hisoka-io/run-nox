@@ -15,6 +15,9 @@ NOX_IMAGE = re.compile(r"^ghcr\.io/hisoka-io/nox@sha256:[0-9a-f]{64}$")
 IMMUTABLE_IMAGE = re.compile(
     r"^[a-z0-9][a-z0-9._/-]*(?::[a-zA-Z0-9._-]+)?@sha256:[0-9a-f]{64}$"
 )
+# release.noxKps: the nox-kps version shipped in release.noxImage (optional;
+# set when the pinned node release carries nox-kps).
+NOX_KPS_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
 IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
 SELECTOR = {
     "reward_pool": "0x99f91c28",
@@ -109,6 +112,14 @@ def validate_release(
     expected_preflight = immutable_image(
         release.get("preflightImage"), "release.preflightImage", IMMUTABLE_IMAGE
     )
+    nox_kps = release.get("noxKps")
+    if nox_kps is not None and (
+        not isinstance(nox_kps, str) or NOX_KPS_VERSION.fullmatch(nox_kps) is None
+    ):
+        fail("release.noxKps must be the nox-kps version shipped in release.noxImage, such as 0.1.0")
+    unknown = set(release) - {"noxImage", "preflightImage", "noxKps"}
+    if unknown:
+        fail(f"deployment release has unknown fields: {sorted(unknown)}")
     actual_nox = immutable_image(nox_image, "NOX image", NOX_IMAGE)
     if actual_nox != expected_nox:
         fail("NOX image must equal deployment release.noxImage")

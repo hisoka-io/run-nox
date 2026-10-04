@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Preflight for the optional nox-kps sidecar (Compose profile "kps").
 
-usage: preflight_kps.py <nox-kps.toml> <config.toml> <nox-kps-image>
+usage: preflight_kps.py <nox-kps.toml> <config.toml> <deployment.json> <nox-image>
 
+nox-kps ships in the node image and runs from the same digest as the node.
 Checks, without network access and without reading any secret:
-  - the image is an immutable ghcr.io/hisoka-io/nox-kps@sha256 digest
+  - the image is the release record's immutable ghcr.io/hisoka-io/nox@sha256
+    digest, and the record names the nox-kps version that image ships
+    (release.noxKps)
   - nox-kps.toml uses only keys nox-kps knows (flat schema; nox-kps refuses others)
   - listen is a wildcard UDP socket address and advertise lists only public IPs
     (clients dial these addresses directly; there is no DNS)
@@ -23,13 +26,15 @@ this check reads the file, not NOX__ environment overrides.
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import sys
 import tomllib
 from pathlib import Path
 from typing import NoReturn
 
-KPS_IMAGE = re.compile(r"^ghcr\.io/hisoka-io/nox-kps@sha256:[0-9a-f]{64}$")
+NOX_IMAGE = re.compile(r"^ghcr\.io/hisoka-io/nox@sha256:[0-9a-f]{64}$")
+VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
 HEADER = re.compile(r"^[a-z0-9!#$%&'*+.^_`|~-]+$")
 # nox-kps RawConfig (deny_unknown_fields): top-level keys and the two tables.
 KEYS = {
@@ -43,8 +48,8 @@ NODE_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 IDENTITY_DIR = "/var/lib/nox-kps/"
 BUNDLE_DIR = "/var/lib/nox-kps/keccak"
 INIT_HINT = (
-    "run `docker compose run --rm nox-kps-init` and `docker compose run --rm --no-deps nox-kps nox-kps init` "
-    "once, back up the key, then copy the printed expected_certhash line into nox-kps.toml (README \"KPS Entry\")"
+    "run `docker compose run --rm nox-kps-admin init` once, back up the key, then copy the printed "
+    "expected_certhash line into nox-kps.toml (README \"KPS Entry\")"
 )
 NOX_KPS_UID = 10002
 PROC_NET = (Path("/proc/net/udp"), Path("/proc/net/udp6"))
@@ -62,6 +67,32 @@ def load(path: Path, label: str) -> dict[str, object]:
     except (OSError, tomllib.TOMLDecodeError) as error:
         fail(f"{label} cannot be parsed: {error}")
     return value
+
+
+def release_kps_version(deployment_path: Path, image: str) -> str:
+    """The nox-kps version the pinned node image ships, from the release record."""
+    try:
+        deployment = json.loads(deployment_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"deployment.json cannot be parsed: {error}")
+    release = deployment.get("release") if isinstance(deployment, dict) else None
+    if not isinstance(release, dict):
+        fail("deployment.json has no release object; copy configs/arbitrum-sepolia.deployment.json again")
+    if NOX_IMAGE.fullmatch(image) is None:
+        fail(f"NOX_IMAGE must be an immutable ghcr.io/hisoka-io/nox@sha256:<digest> reference (got {image!r})")
+    if image != release.get("noxImage"):
+        fail("NOX_IMAGE must equal deployment.json release.noxImage: nox-kps runs from the node's release image")
+    version = release.get("noxKps")
+    if version is None:
+        fail(
+            "deployment.json release.noxKps is unset. The KPS entry runs from a node release that ships "
+            "nox-kps, and its release record names the nox-kps version in release.noxKps. Update run-nox to "
+            "such a release, copy the manifest to deployment.json again, then enable the kps profile "
+            '(README "KPS Entry")'
+        )
+    if not isinstance(version, str) or VERSION.fullmatch(version) is None:
+        fail(f"deployment.json release.noxKps must be a version such as \"0.1.0\" (got {version!r})")
+    return version
 
 
 def table(config: dict[str, object], name: str) -> dict[str, object]:
@@ -93,13 +124,15 @@ def loopback_host_port(value: object, field: str, example: str) -> int:
         fail(f"{field} must be a string such as \"{example}\"")
     if "://" in value:
         fail(f"{field} must be a bare host:port such as \"{example}\", without a scheme (got {value!r})")
-    match = re.fullmatch(r"(127\.0\.0\.1|localhost|\[::1\]):([0-9]{1,5})", value)
-    if match is None or not 1 <= int(match.group(2)) <= 65535:
+    # The node binds its ingress and topology ports on 0.0.0.0 (IPv4), so the
+    # upstreams use the IPv4 loopback address itself, not a name.
+    match = re.fullmatch(r"127\.0\.0\.1:([0-9]{1,5})", value)
+    if match is None or not 1 <= int(match.group(1)) <= 65535:
         fail(
-            f"{field} must be {example.rsplit(':', 1)[0]}:<port> (the node trusts the client IP header on loopback "
-            f"only, and metrics stay on the host; got {value!r})"
+            f"{field} must be 127.0.0.1:<port> (the node listens on IPv4 and trusts the client IP header on "
+            f"loopback only, and metrics stay on the host; got {value!r})"
         )
-    return int(match.group(2))
+    return int(match.group(1))
 
 
 def node_port(node: dict[str, object], field: str) -> int:
@@ -128,13 +161,11 @@ def udp_port_owners(port: int) -> set[int]:
 
 
 def main(argv: list[str]) -> None:
-    if len(argv) != 4:
-        fail("usage: preflight_kps.py <nox-kps.toml> <config.toml> <nox-kps-image>")
+    if len(argv) != 5:
+        fail("usage: preflight_kps.py <nox-kps.toml> <config.toml> <deployment.json> <nox-image>")
+    kps_version = release_kps_version(Path(argv[3]), argv[4])
     kps_config = load(Path(argv[1]), "nox-kps.toml")
     node = load(Path(argv[2]), "config.toml")
-    image = argv[3]
-    if KPS_IMAGE.fullmatch(image) is None:
-        fail(f"NOX_KPS_IMAGE must be an immutable ghcr.io/hisoka-io/nox-kps@sha256:<digest> reference (got {image!r})")
 
     unknown = set(kps_config) - KEYS
     if unknown:
@@ -174,7 +205,7 @@ def main(argv: list[str]) -> None:
     expected = kps_config.get("expected_certhash", "")
     if not isinstance(expected, str) or expected.strip() == "":
         fail(f"expected_certhash is empty, so nox-kps would refuse to run: {INIT_HINT}")
-    if CERTHASH.fullmatch(expected.strip()) is None:
+    if CERTHASH.fullmatch(expected) is None:
         fail(f"expected_certhash must be the certhash `nox-kps init` printed (\"uEi\" + 44 characters; got {expected!r})")
     node_address = kps_config.get("node_address", "")
     if not isinstance(node_address, str) or (node_address and NODE_ADDRESS.fullmatch(node_address) is None):
@@ -221,7 +252,7 @@ def main(argv: list[str]) -> None:
         fail(f"UDP {kps_port} is already in use by UID(s) {sorted(foreign)}; nox-kps needs it")
 
     print(
-        f"nox-kps preflight passed: UDP {kps_port} on {', '.join(map(str, advertise))}, certhash {expected.strip()}, "
+        f"nox-kps {kps_version} preflight passed: UDP {kps_port} on {', '.join(map(str, advertise))}, certhash {expected.strip()}, "
         f"upstreams 127.0.0.1:{ingress_port}/{topology_upstream}, client IP header {header}"
     )
 

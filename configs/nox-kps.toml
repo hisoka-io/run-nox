@@ -1,12 +1,12 @@
-# nox-kps sidecar config (Compose profile "kps"). Copy to ./nox-kps.toml.
+# nox-kps config (Compose profile "kps"). Copy to ./nox-kps.toml.
 # Every value here is public; the identity key lives in the nox-kps-identity
-# volume. `nox-kps-preflight` checks this file against config.toml on each start,
-# and nox-kps itself refuses unknown keys. Keys not listed keep the nox-kps
-# defaults ([limits] and [shutdown] sized for 2 GiB hosts).
+# volume. `nox-kps-preflight` checks this file against config.toml and
+# deployment.json on each start, and nox-kps itself refuses unknown keys.
+# `docker compose run --rm nox-kps-admin check-config` prints the values in
+# effect, including the main [limits] (defaults sized for 2 GiB hosts).
 
 # One UDP socket serves browsers (WebRTC) and native clients (QUIC).
-# Use "0.0.0.0:15005" on a host without IPv6.
-listen = "[::]:15005"
+listen = "0.0.0.0:15005"
 
 # REQUIRED: this host's public IP. Cloud hosts are NATed, so it cannot be
 # detected from the interface. Clients dial <ip>:15005:<certhash> directly.
@@ -30,10 +30,22 @@ upstream_topology = "127.0.0.1:15003"
 # Must equal [ingress] client_ip_header in config.toml.
 client_ip_header = "x-real-ip"
 
-# Worker bundles served at /keccak/<hh>/<62 hex> (anon-rpc kps: resolver).
+# Worker bundles served at /keccak/<hh>/<62 hex> (anon-rpc kps: resolver),
+# from the nox-kps-bundles volume.
 keccak_dir = "/var/lib/nox-kps/keccak"
 
 # Prometheus /metrics and /healthz; loopback only.
 admin_listen = "127.0.0.1:15006"
 
 log_format = "json"
+
+# Connection, rate and size limits. To change a default, uncomment [limits] and
+# the key. The defaults suit a 2 GiB host running the node next to nox-kps.
+# [limits]
+# max_connections = 256
+# max_connections_per_ip = 16
+# max_streams_per_connection = 32
+# packet_rate_per_ip = 20
+# packet_burst = 100
+# claim_rate_per_ip = 30
+# claim_burst = 200

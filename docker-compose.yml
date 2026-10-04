@@ -9,9 +9,10 @@
 #   5. Exit only: echo 'COMPOSE_PROFILES=exit' >> .env   (adds the price server)
 #   6. docker compose up -d
 #
-# Optional KPS entry (README "KPS Entry"): the "kps" profile adds the nox-kps
-# sidecar (UDP 15005, WebRTC + QUIC) next to the node. Needs NOX_KPS_IMAGE and
-# nox-kps.toml; without the profile nothing below the nox service starts.
+# Optional KPS entry (README "KPS Entry"): the "kps" profile runs nox-kps (UDP
+# 15005, WebRTC + QUIC) as its own container from the same NOX_IMAGE as the
+# node. It needs nox-kps.toml and a release record with release.noxKps; with
+# the profile off, Compose starts only the services above.
 
 services:
   preflight:
@@ -135,9 +136,10 @@ services:
       start_period: 30s
 
   # --- Optional KPS entry (profile "kps") ---------------------------------
-  # Checks nox-kps.toml against config.toml before the sidecar starts: public
-  # IP, loopback upstreams on the enabled ingress/topology ports, the shared
-  # client IP header, and that UDP 15005 is free (or held by nox-kps itself).
+  # Checks nox-kps.toml against config.toml and the release record before the
+  # sidecar starts: an image that ships nox-kps, public IP, loopback upstreams on
+  # the enabled ingress/topology ports, the shared client IP header, and that UDP
+  # 15005 is free (or held by nox-kps itself).
   nox-kps-preflight:
     image: ${NOX_PREFLIGHT_IMAGE:?NOX_PREFLIGHT_IMAGE must be the immutable preflight digest in deployment.json}
     container_name: nox-kps-preflight
@@ -161,6 +163,12 @@ services:
         bind:
           create_host_path: false
       - type: bind
+        source: ./deployment.json
+        target: /etc/nox-release/deployment.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
         source: ./scripts/preflight_kps.py
         target: /opt/nox/preflight_kps.py
         read_only: true
@@ -172,14 +180,21 @@ services:
     command:
       - /etc/nox-kps/config.toml
       - /etc/nox/config.toml
-      - ${NOX_KPS_IMAGE:-ghcr.io/hisoka-io/nox-kps:set-NOX_KPS_IMAGE-to-a-digest}
+      - /etc/nox-release/deployment.json
+      - ${NOX_IMAGE:?NOX_IMAGE must be the immutable Nox digest in deployment.json}
     restart: "no"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
-  # Gives the nox-kps volumes to the sidecar UID 10002 (idempotent).
+  # Gives the nox-kps volumes to the nox-kps UID 10002 (idempotent). Shares the
+  # kps-admin profile so one-off nox-kps-admin commands run it first.
   nox-kps-init:
     image: ${NOX_IMAGE:?NOX_IMAGE must be an immutable ghcr.io/hisoka-io/nox digest}
     container_name: nox-kps-init
-    profiles: ["kps"]
+    profiles: ["kps", "kps-admin"]
     user: "0:0"
     read_only: true
     cap_drop: ["ALL"]
@@ -192,25 +207,29 @@ services:
       - nox-kps-bundles:/var/lib/nox-kps-bundles
     restart: "no"
 
-  # KPS entry sidecar: browsers (WebRTC) and native clients (QUIC) dial
-  # <public ip>:15005:<certhash>; each stream is proxied to the node's loopback
-  # ingress and topology API. The identity key (certhash = published address)
-  # lives in nox-kps-identity: back it up and keep the volume. Create it once with
-  # `docker compose run --rm --no-deps nox-kps nox-kps init` and put the printed
-  # certhash in nox-kps.toml expected_certhash: `run` serves only that identity.
+  # KPS entry: browsers (WebRTC) and native clients (QUIC) dial
+  # <public ip>:15005:<certhash>; each allowlisted request is proxied to the
+  # node's loopback ingress and topology API. The nox-kps binary ships in the
+  # node image (same digest as the nox service) and runs here as its own
+  # process with its own UID, memory limit and restarts. The identity key
+  # (certhash = published address) lives in nox-kps-identity: back it up and
+  # keep the volume. `nox-kps run` serves only the identity whose certhash is
+  # expected_certhash in nox-kps.toml (README "KPS Entry").
   nox-kps:
-    # A default instead of ${...:?} keeps Compose working for operators without
-    # the kps profile; with the profile, nox-kps-preflight rejects anything but
-    # an immutable ghcr.io/hisoka-io/nox-kps@sha256 digest.
-    image: ${NOX_KPS_IMAGE:-ghcr.io/hisoka-io/nox-kps:set-NOX_KPS_IMAGE-to-a-digest}
+    image: ${NOX_IMAGE:?NOX_IMAGE must be an immutable ghcr.io/hisoka-io/nox digest}
     container_name: nox-kps
     profiles: ["kps"]
     user: "10002:10002"
     read_only: true
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
+    # Host networking: UDP 15005 on the host, and loopback upstreams, which is
+    # where the node trusts the client IP header.
     network_mode: host
-    command: ["nox-kps", "run"]
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    entrypoint: ["nox-kps"]
+    command: ["run"]
     environment:
       - NOX_KPS_CONFIG=/etc/nox-kps/config.toml
     volumes:
@@ -245,6 +264,40 @@ services:
       timeout: 6s
       retries: 3
       start_period: 10s
+
+  # One-off nox-kps commands with the same image, UID, config and volumes,
+  # networking turned off, and the bundle volume writable:
+  #   docker compose run --rm nox-kps-admin init
+  #   docker compose run --rm nox-kps-admin address
+  #   docker compose run --rm nox-kps-admin check-config
+  #   docker compose run --rm -v "$PWD/<file>:/in/<file>:ro" nox-kps-admin bundle add /in/<file>
+  nox-kps-admin:
+    image: ${NOX_IMAGE:?NOX_IMAGE must be an immutable ghcr.io/hisoka-io/nox digest}
+    profiles: ["kps-admin"]
+    user: "10002:10002"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    entrypoint: ["nox-kps"]
+    command: ["check-config"]
+    environment:
+      - NOX_KPS_CONFIG=/etc/nox-kps/config.toml
+    volumes:
+      - type: bind
+        source: ./nox-kps.toml
+        target: /etc/nox-kps/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - nox-kps-identity:/var/lib/nox-kps
+      - nox-kps-bundles:/var/lib/nox-kps/keccak
+    depends_on:
+      nox-kps-init:
+        condition: service_completed_successfully
+    restart: "no"
 
 volumes:
   nox-identity:
