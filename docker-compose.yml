@@ -8,6 +8,10 @@
 #   4. cp configs/relay.toml config.toml   # or configs/exit.toml
 #   5. Exit only: echo 'COMPOSE_PROFILES=exit' >> .env   (adds the price server)
 #   6. docker compose up -d
+#
+# Optional KPS entry (README "KPS Entry"): the "kps" profile adds the nox-kps
+# sidecar (UDP 15005, WebRTC + QUIC) next to the node. Needs NOX_KPS_IMAGE and
+# nox-kps.toml; without the profile nothing below the nox service starts.
 
 services:
   preflight:
@@ -130,7 +134,118 @@ services:
       retries: 3
       start_period: 30s
 
+  # --- Optional KPS entry (profile "kps") ---------------------------------
+  # Checks nox-kps.toml against config.toml before the sidecar starts: public
+  # IP, loopback upstreams on the enabled ingress/topology ports, the shared
+  # client IP header, and that UDP 15005 is free (or held by nox-kps itself).
+  nox-kps-preflight:
+    image: ${NOX_PREFLIGHT_IMAGE:?NOX_PREFLIGHT_IMAGE must be the immutable preflight digest in deployment.json}
+    container_name: nox-kps-preflight
+    profiles: ["kps"]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: host
+    volumes:
+      - type: bind
+        source: ./nox-kps.toml
+        target: /etc/nox-kps/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config.toml
+        target: /etc/nox/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts/preflight_kps.py
+        target: /opt/nox/preflight_kps.py
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+    entrypoint: ["python3", "/opt/nox/preflight_kps.py"]
+    command:
+      - /etc/nox-kps/config.toml
+      - /etc/nox/config.toml
+      - ${NOX_KPS_IMAGE:-ghcr.io/hisoka-io/nox-kps:set-NOX_KPS_IMAGE-to-a-digest}
+    restart: "no"
+
+  # Gives the nox-kps volumes to the sidecar UID 10002 (idempotent).
+  nox-kps-init:
+    image: ${NOX_IMAGE:?NOX_IMAGE must be an immutable ghcr.io/hisoka-io/nox digest}
+    container_name: nox-kps-init
+    profiles: ["kps"]
+    user: "0:0"
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "DAC_READ_SEARCH"]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    entrypoint: ["chown", "-R", "10002:10002", "/var/lib/nox-kps", "/var/lib/nox-kps-bundles"]
+    volumes:
+      - nox-kps-identity:/var/lib/nox-kps
+      - nox-kps-bundles:/var/lib/nox-kps-bundles
+    restart: "no"
+
+  # KPS entry sidecar: browsers (WebRTC) and native clients (QUIC) dial
+  # <public ip>:15005:<certhash>; each stream is proxied to the node's loopback
+  # ingress and topology API. The identity key (certhash = published address)
+  # lives in nox-kps-identity: back it up and never delete the volume.
+  nox-kps:
+    # A default instead of ${...:?} keeps Compose working for operators without
+    # the kps profile; with the profile, nox-kps-preflight rejects anything but
+    # an immutable ghcr.io/hisoka-io/nox-kps@sha256 digest.
+    image: ${NOX_KPS_IMAGE:-ghcr.io/hisoka-io/nox-kps:set-NOX_KPS_IMAGE-to-a-digest}
+    container_name: nox-kps
+    profiles: ["kps"]
+    user: "10002:10002"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: host
+    command: ["nox-kps", "run"]
+    environment:
+      - NOX_KPS_CONFIG=/etc/nox-kps/config.toml
+    volumes:
+      - type: bind
+        source: ./nox-kps.toml
+        target: /etc/nox-kps/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - nox-kps-identity:/var/lib/nox-kps
+      - nox-kps-bundles:/var/lib/nox-kps/keccak:ro
+    depends_on:
+      nox-kps-preflight:
+        condition: service_completed_successfully
+      nox-kps-init:
+        condition: service_completed_successfully
+      nox:
+        condition: service_started
+    restart: unless-stopped
+    stop_grace_period: 10s
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "nox-kps", "healthcheck"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
 volumes:
   nox-identity:
   nox-data:
   nox-logs:
+  nox-kps-identity:
+  nox-kps-bundles:

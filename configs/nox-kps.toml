@@ -1,0 +1,33 @@
+# nox-kps sidecar config (Compose profile "kps"). Copy to ./nox-kps.toml.
+# Every value here is public; the identity key lives in the nox-kps-identity
+# volume. `nox-kps-preflight` checks this file against config.toml on each start.
+# Keys not listed keep the nox-kps defaults (limits sized for 2 GiB hosts).
+
+[kps]
+# One UDP socket serves browsers (WebRTC) and native clients (QUIC).
+# Use "0.0.0.0:15005" on a host without IPv6.
+listen = "[::]:15005"
+identity_key_file = "/var/lib/nox-kps/kps.key"
+# REQUIRED: this host's public IP. Cloud hosts are NATed, so it cannot be
+# detected from the interface. Clients dial <ip>:15005:<certhash> directly.
+public_ips = ["203.0.113.10"]
+
+[upstreams]
+# The node's loopback ingress (ingress_port) and topology API (topology_api_port).
+ingress = "http://127.0.0.1:15002"
+topology = "http://127.0.0.1:15003"
+
+[proxy]
+# Must equal [ingress] client_ip_header in config.toml.
+client_ip_header = "x-real-ip"
+
+[bundles]
+# Worker bundles served at /keccak/<hh>/<62 hex> (anon-rpc kps: resolver).
+dir = "/var/lib/nox-kps/keccak"
+
+[metrics]
+# Prometheus /metrics and /health; loopback only.
+listen = "127.0.0.1:15006"
+
+[log]
+format = "json"

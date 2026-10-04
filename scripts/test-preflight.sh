@@ -10,8 +10,8 @@ export NOX__P2P_PRIVATE_KEY="$(printf '22%.0s' {1..32})"
 export NOX__ETH_WALLET_PRIVATE_KEY="$(printf '33%.0s' {1..32})"
 
 [[ "$(grep -c 'user: "10001:10001"' "$repo_dir/docker-compose.yml")" -eq 2 ]]
-[[ "$(grep -c 'cap_drop: \["ALL"\]' "$repo_dir/docker-compose.yml")" -eq 3 ]]
-[[ "$(grep -c 'no-new-privileges:true' "$repo_dir/docker-compose.yml")" -eq 3 ]]
+[[ "$(grep -c 'cap_drop: \["ALL"\]' "$repo_dir/docker-compose.yml")" -eq 6 ]]
+[[ "$(grep -c 'no-new-privileges:true' "$repo_dir/docker-compose.yml")" -eq 6 ]]
 
 python3 - "$repo_dir/docker-compose.yml" <<'PY'
 from pathlib import Path
@@ -73,6 +73,128 @@ if optional_price not in nox:
     raise SystemExit("nox must not wait for a healthy price server, and relays run without one")
 if "service_healthy" in nox:
     raise SystemExit("nox must not wait for a healthy price server")
+
+# Optional KPS entry: every nox-kps service is opt-in (profile "kps"), hardened,
+# and the sidecar starts only after its own preflight and the volume init.
+for name in ("nox-kps-preflight", "nox-kps-init", "nox-kps"):
+    body = service(name)
+    if 'profiles: ["kps"]' not in body:
+        raise SystemExit(f"{name} must run only under the kps profile")
+    if 'cap_drop: ["ALL"]' not in body or "no-new-privileges:true" not in body or "read_only: true" not in body:
+        raise SystemExit(f"{name} is not hardened (cap_drop ALL, no-new-privileges, read-only root)")
+kps = service("nox-kps")
+if 'user: "10002:10002"' not in kps or "network_mode: host" not in kps:
+    raise SystemExit("nox-kps must run as UID 10002 on the host network (loopback upstreams)")
+for dependency in ("nox-kps-preflight", "nox-kps-init"):
+    if f"{dependency}:\n        condition: service_completed_successfully" not in kps:
+        raise SystemExit(f"nox-kps can start without {dependency}")
+if "nox-kps-bundles:/var/lib/nox-kps/keccak:ro" not in kps or "create_host_path: false" not in kps:
+    raise SystemExit("nox-kps must mount bundles read-only and fail closed without nox-kps.toml")
+if 'test: ["CMD", "nox-kps", "healthcheck"]' not in kps or "mem_limit: 512m" not in kps:
+    raise SystemExit("nox-kps needs its healthcheck and a memory limit")
+kps_preflight = service("nox-kps-preflight")
+if "image: ${NOX_PREFLIGHT_IMAGE:?" not in kps_preflight or kps_preflight.count("create_host_path: false") != 3:
+    raise SystemExit("nox-kps-preflight must use the pinned preflight image and fail closed on missing files")
+if "env_file" in kps_preflight:
+    raise SystemExit("nox-kps-preflight needs no secrets and must not load .env")
+init = service("nox-kps-init")
+if 'cap_add: ["CHOWN", "DAC_READ_SEARCH"]' not in init or "network_mode: none" not in init:
+    raise SystemExit("nox-kps-init must keep only CHOWN and DAC_READ_SEARCH and run without a network")
+if "${NOX_KPS_IMAGE:?" in compose:
+    raise SystemExit("a required NOX_KPS_IMAGE would break Compose for operators without the kps profile")
+PY
+
+# nox-kps preflight (scripts/preflight_kps.py): one valid config passes, each
+# unsafe or inconsistent one is rejected with an actionable message.
+python3 - "$repo_dir" <<'PY'
+import socket
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+repo = Path(sys.argv[1])
+work = Path(tempfile.mkdtemp())
+script = repo / "scripts" / "preflight_kps.py"
+image = "ghcr.io/hisoka-io/nox-kps@sha256:" + "ab" * 32
+template = (repo / "configs" / "nox-kps.toml").read_text(encoding="utf-8")
+relay = (repo / "configs" / "relay.toml").read_text(encoding="utf-8")
+
+
+def free_udp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("0.0.0.0", 0))
+        return probe.getsockname()[1]
+
+
+port = free_udp_port()
+listen_line = f'listen = "0.0.0.0:{port}"'
+good_kps = template.replace('public_ips = ["203.0.113.10"]', 'public_ips = ["3.239.73.249"]').replace(
+    'listen = "[::]:15005"', listen_line
+)
+header_block = '\n[ingress]\nclient_ip_header = "x-real-ip"\n'
+good_node = (
+    relay.replace("ingress_port = 0", "ingress_port = 15002").replace("topology_api_port = 0", "topology_api_port = 15003")
+    + header_block
+)
+
+
+def run(kps: str, node: str, kps_image: str = image) -> subprocess.CompletedProcess[str]:
+    (work / "nox-kps.toml").write_text(kps, encoding="utf-8")
+    (work / "config.toml").write_text(node, encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(script), str(work / "nox-kps.toml"), str(work / "config.toml"), kps_image],
+        capture_output=True, text=True, check=False,
+    )
+
+
+ok = run(good_kps, good_node)
+if ok.returncode != 0 or "nox-kps preflight passed" not in ok.stdout:
+    raise SystemExit(f"valid nox-kps config rejected: {ok.stderr}")
+ipv6_ok = run(good_kps.replace(listen_line, f'listen = "[::]:{port}"'), good_node)
+if ipv6_ok.returncode != 0:
+    raise SystemExit(f"dual-stack listen rejected: {ipv6_ok.stderr}")
+
+cases = {
+    "the template's documentation IP": (
+        template.replace('listen = "[::]:15005"', listen_line), good_node, image, "not a public IP"),
+    "a mutable image tag": (good_kps, good_node, "ghcr.io/hisoka-io/nox-kps:latest", "immutable"),
+    "the Compose placeholder image": (
+        good_kps, good_node, "ghcr.io/hisoka-io/nox-kps:set-NOX_KPS_IMAGE-to-a-digest", "immutable"),
+    "a disabled node ingress": (
+        good_kps, good_node.replace("ingress_port = 15002", "ingress_port = 0"), image, "ingress_port is 0"),
+    "a mismatched client IP header": (
+        good_kps, good_node.replace('client_ip_header = "x-real-ip"', 'client_ip_header = "x-forwarded-for"'),
+        image, "client_ip_header"),
+    "a node without the header": (good_kps, good_node.replace(header_block, "\n"), image, "client_ip_header"),
+    "a non-loopback upstream": (
+        good_kps.replace("http://127.0.0.1:15002", "http://10.0.0.5:15002"), good_node, image, "127.0.0.1"),
+    "an upstream on the wrong port": (
+        good_kps.replace("http://127.0.0.1:15002", "http://127.0.0.1:15009"), good_node, image, "ingress_port"),
+    "a topology upstream on no topology port": (
+        good_kps.replace("http://127.0.0.1:15003", "http://127.0.0.1:15009"), good_node, image, "serves no topology"),
+    "a public metrics listener": (
+        good_kps.replace('listen = "127.0.0.1:15006"', 'listen = "0.0.0.0:15006"'), good_node, image, "loopback"),
+    "a bind to a specific address": (
+        good_kps.replace(listen_line, f'listen = "3.239.73.249:{port}"'), good_node, image, "0.0.0.0"),
+    "an identity outside the volume": (
+        good_kps.replace("/var/lib/nox-kps/kps.key", "/tmp/kps.key"), good_node, image, "identity_key_file"),
+    "an unknown section": (good_kps + "\n[extra]\na = 1\n", good_node, image, "unknown sections"),
+    "a KPS port equal to a node port": (
+        good_kps.replace(listen_line, 'listen = "0.0.0.0:15001"'), good_node, image, "collides"),
+}
+for label, (kps, node, kps_image, needle) in cases.items():
+    result = run(kps, node, kps_image)
+    if result.returncode == 0 or needle not in result.stderr:
+        raise SystemExit(f"nox-kps preflight accepted {label}: rc={result.returncode} {result.stderr}")
+
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as busy:
+    busy.bind(("0.0.0.0", 0))
+    busy_port = busy.getsockname()[1]
+    result = run(good_kps.replace(listen_line, f'listen = "0.0.0.0:{busy_port}"'), good_node)
+    if result.returncode == 0 or "already in use" not in result.stderr:
+        raise SystemExit(f"nox-kps preflight accepted a UDP port held by another process: {result.stderr}")
+print(f"nox-kps preflight: 2 valid configs passed, {len(cases) + 1} invalid configs rejected")
 PY
 
 python3 - "$repo_dir/configs" <<'PY'
