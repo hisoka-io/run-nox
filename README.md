@@ -120,6 +120,125 @@ docker compose up -d
 
 `cast send` waits for the receipt. Start the node only after the claim succeeded; on start it reads the new nonce.
 
+## KPS Entry (optional)
+
+`nox-kps` lets wallets and browsers reach your node directly over [KPS](https://github.com/ethereum/kps):
+WebRTC for browsers and QUIC for native clients, both on one UDP port, without a domain name or TLS
+certificate to manage. Clients pin the sidecar's certificate hash, which is part of the address they dial. The
+sidecar runs next to the node under the Compose profile `kps`. It forwards each request on an allowlisted route
+(packet submit, response claim, topology, health) to the node's loopback ingress and topology API, and enforces
+its own size, connection and time limits. Packet policy (PoW, validity, SURB IDs) stays in the node, so both
+entry paths share one policy.
+
+You need:
+
+- UDP `15005` open inbound in your cloud firewall and host firewall (see Host Firewall below)
+- `NOX_KPS_IMAGE`: the immutable `ghcr.io/hisoka-io/nox-kps@sha256:` digest from the `nox-kps` release record
+- The node ingress and topology API enabled on loopback, with a client IP header shared by the node and the sidecar
+
+1. Enable the loopback ports and the header in `config.toml`, then restart the node:
+
+   ```toml
+   ingress_port = 15002
+   topology_api_port = 15003
+
+   [ingress]
+   client_ip_header = "x-real-ip"
+   ```
+
+   The node binds these ports on all interfaces. Keep `15002` and `15003` closed to the internet with the host
+   firewall; the sidecar reaches them on `127.0.0.1`. The node reads the client IP header only on loopback
+   connections, so each KPS client gets its own rate-limit bucket.
+
+2. Create the sidecar config and set your public IP (cloud hosts are NATed, so it cannot be detected):
+
+   ```bash
+   cp configs/nox-kps.toml nox-kps.toml
+   sed -i 's/"203.0.113.10"/"<your public IP>"/' nox-kps.toml
+   ```
+
+3. Enable the profile and start it (`COMPOSE_PROFILES=exit,kps` on an exit):
+
+   ```bash
+   export NOX_KPS_IMAGE='ghcr.io/hisoka-io/nox-kps@sha256:<digest from the release record>'
+   echo 'COMPOSE_PROFILES=kps' >> .env
+   docker compose up -d
+   docker compose ps nox-kps            # healthy
+   docker compose exec nox-kps nox-kps address   # prints <public ip>:15005:<certhash>
+   ```
+
+   `nox-kps-preflight` runs first and refuses to start the sidecar if the image is not a digest, the public IP is
+   missing or private, an upstream is not loopback, the ingress or topology port is disabled, the client IP
+   headers differ, the metrics listener is public, or another process holds UDP `15005`. `nox-kps-init` gives the
+   two `nox-kps` volumes to UID `10002`.
+
+4. Note your KPS address, `<public ip>:15005:<certhash>`, and dial it from another network with a KPS client
+   (`@kpstreams/quic-client` or `@kpstreams/webrtc-client`), requesting `GET /health` and `GET /topology`.
+
+5. Back up the identity key. The certhash in your address is derived from it, and the key stays in the
+   `nox-kps-identity` volume across restarts and upgrades:
+
+   ```bash
+   (umask 077; docker compose cp nox-kps:/var/lib/nox-kps/kps.key ./kps.key.backup)
+   ```
+
+   Store the copy with the node's other secrets. Never delete the `nox-kps-identity` volume: a new key changes
+   your address.
+
+6. Publish the address in the registry. `updateMetadataUrl` is self-service: it must be sent by your registered
+   node address, which is the key in `NOX__ETH_WALLET_PRIVATE_KEY`. Import that key into an encrypted Foundry
+   keystore once (the command prompts for it, so it never appears in your shell history), then send:
+
+   ```bash
+   cast wallet import nox-node --interactive
+   cast send 0xF7BFf88A1412054a001Dc4b8aCBddAd6F9b26cB6 "updateMetadataUrl(string)" \
+     "kps:<public ip>:15005:<certhash>/metadata.json" \
+     --account nox-node --rpc-url https://sepolia-rollup.arbitrum.io/rpc
+   cast call 0xF7BFf88A1412054a001Dc4b8aCBddAd6F9b26cB6 "relayers(address)(bytes32,string,string,string,uint256,uint256,bool,uint8,bool)" \
+     <node address> --rpc-url https://sepolia-rollup.arbitrum.io/rpc   # 4th value is your metadataUrl
+   ```
+
+   The transaction costs about 130,000 gas. Publish only after step 4 succeeds from another network, and
+   keep the public IP stable: the IP and certhash together are the address clients pin.
+
+To stop serving KPS, clear the published address first, then stop the sidecar. The identity volume stays, so
+re-enabling later keeps the same address:
+
+```bash
+cast send 0xF7BFf88A1412054a001Dc4b8aCBddAd6F9b26cB6 "updateMetadataUrl(string)" "" \
+  --account nox-node --rpc-url https://sepolia-rollup.arbitrum.io/rpc
+docker compose stop nox-kps
+docker compose rm -f nox-kps nox-kps-init nox-kps-preflight
+```
+
+Then remove `kps` from `COMPOSE_PROFILES` in `.env`. Restoring `ingress_port = 0` and `topology_api_port = 0`
+is optional and needs a node restart.
+
+### Host Firewall
+
+Open UDP `15005` and keep the loopback ports closed to the internet. With `ufw` (default deny incoming):
+
+```bash
+# keep your existing SSH rule
+sudo ufw allow 15005/udp
+sudo ufw allow 15000/tcp
+sudo ufw allow 15001/tcp
+sudo ufw status numbered   # 15002, 15003, 15004 and 15006 must not appear
+```
+
+With plain `iptables`, put the rules in a script that a systemd oneshot unit runs at boot, so they persist:
+
+```bash
+iptables -N NOX-FW 2>/dev/null || iptables -F NOX-FW
+iptables -A NOX-FW -i lo -j RETURN
+iptables -A NOX-FW -p udp --dport 15005 -j RETURN
+iptables -A NOX-FW -p tcp -m multiport --dports 15002,15003,15004,15006 -j DROP
+iptables -C INPUT -j NOX-FW 2>/dev/null || iptables -I INPUT 1 -j NOX-FW
+```
+
+Repeat with `ip6tables` on hosts with IPv6. Check from another network that UDP `15005` answers a KPS dial and
+that TCP `15002`, `15003` and `15006` refuse connections.
+
 ## Target Network Configuration
 
 The checked-in templates target Arbitrum Sepolia:
@@ -195,9 +314,11 @@ so it can reject a quote even when that quote is below the per-transaction ceili
 |---|---|---|
 | `15000/tcp` | libp2p | Public |
 | `15001/tcp` | Metrics and topology (read-only) | Public: the indexer probes it |
-| `15002/tcp` | Client ingress | Off in the templates. Entry nodes only, behind an https proxy |
-| `15003/tcp` | Topology API | Off in the templates |
+| `15002/tcp` | Client ingress | Off in the templates. Entry nodes only, behind an https proxy or `nox-kps` (loopback) |
+| `15003/tcp` | Topology API | Off in the templates. Loopback for `nox-kps` |
 | `15004/tcp` | Price server | Exits only, bound to `127.0.0.1` |
+| `15005/udp` | KPS entry (`nox-kps`, WebRTC + QUIC) | Public, profile `kps` only |
+| `15006/tcp` | `nox-kps` metrics and health | Bound to `127.0.0.1`, profile `kps` only |
 
 `metrics_port` must equal `p2p_port + 1`. The Hisoka indexer derives the metrics URL from your registered
 multiaddr (TCP port + 1) and polls `/topology` and `/metrics/json` there. If it cannot reach the port, the seed
