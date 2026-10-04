@@ -182,7 +182,7 @@ You need:
 
    Store the backup with the node's other secrets and keep the `nox-kps-identity` volume: the certhash in your
    address is derived from this key. `nox-kps run` serves only the identity whose certhash matches
-   `expected_certhash`, so a swapped or wrongly restored volume never answers under your published address.
+   `expected_certhash`, which keeps your published address bound to this key.
 
 5. Start the sidecar and check it:
 

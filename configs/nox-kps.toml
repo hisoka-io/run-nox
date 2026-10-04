@@ -16,8 +16,7 @@ advertise = ["203.0.113.10"]
 key_file = "/var/lib/nox-kps/kps.key"
 
 # REQUIRED before `up`: the certhash `nox-kps init` printed. nox-kps serves only
-# this identity, so a swapped or wrongly restored volume never answers under
-# your published address.
+# this identity, which keeps your published address bound to your key.
 expected_certhash = ""
 
 # Optional: your registered node address (0x...), shown in /metadata.json.
