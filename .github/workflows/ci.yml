@@ -29,17 +29,25 @@ jobs:
           python-version: "3.12"
       - name: Preflight tests
         run: bash scripts/test-preflight.sh
-      - name: Compose resolves for relays and exits
+      - name: Compose resolves for relays, exits and the KPS entry
         run: |
-          touch .env config.toml deployment.json
+          touch .env config.toml deployment.json nox-kps.toml
           export NOX_IMAGE="$(jq -r .release.noxImage configs/arbitrum-sepolia.deployment.json)"
           export NOX_PREFLIGHT_IMAGE="$(jq -r .release.preflightImage configs/arbitrum-sepolia.deployment.json)"
           relay="$(docker compose config --services | sort | tr '\n' ' ')"
           exit_services="$(docker compose --profile exit config --services | sort | tr '\n' ' ')"
+          kps="$(docker compose --profile exit --profile kps config --services | sort | tr '\n' ' ')"
+          kps_admin="$(docker compose --profile kps-admin config --services | sort | tr '\n' ' ')"
           echo "relay: $relay"
           echo "exit: $exit_services"
+          echo "kps: $kps"
+          echo "kps-admin: $kps_admin"
           test "$relay" = "nox preflight "
           test "$exit_services" = "nox preflight price-server "
+          test "$kps" = "nox nox-kps nox-kps-init nox-kps-preflight preflight price-server "
+          test "$kps_admin" = "nox nox-kps-admin nox-kps-init preflight "
+          # The KPS volumes appear only with the profile.
+          test "$(docker compose config --volumes | sort | tr '\n' ' ')" = "nox-data nox-identity nox-logs "
 
   image:
     name: Keygen and check-config on the pinned image
@@ -67,6 +75,28 @@ jobs:
             grep -q '^configuration OK$' <<<"$output"
             grep -i "^node_role: $role$" <<<"$output"
           done
+      - name: The pinned image ships the recorded nox-kps and accepts the template
+        run: |
+          NOX_KPS="$(jq -r '.release.noxKps // empty' configs/arbitrum-sepolia.deployment.json)"
+          if [ -z "$NOX_KPS" ]; then
+            echo "release.noxKps is unset: this release runs without the kps profile"
+            exit 0
+          fi
+          test "$(docker run --rm "$NOX_IMAGE" nox-kps --version)" = "nox-kps $NOX_KPS"
+          work="$(mktemp -d)"
+          mkdir "$work/keccak"
+          chmod 0777 "$work" "$work/keccak"
+          sed 's/"203.0.113.10"/"198.51.100.20"/' configs/nox-kps.toml > "$work/nox-kps.toml"
+          kps() {
+            docker run --rm --user 10002:10002 --network none --entrypoint nox-kps \
+              -e NOX_KPS_CONFIG=/etc/nox-kps/config.toml \
+              -v "$work/nox-kps.toml:/etc/nox-kps/config.toml:ro" \
+              -v "$work:/var/lib/nox-kps" "$NOX_IMAGE" "$@"
+          }
+          certhash="$(kps init | sed -n 's/^certhash: //p')"
+          test -n "$certhash"
+          sed -i "s/^expected_certhash = \"\"/expected_certhash = \"$certhash\"/" "$work/nox-kps.toml"
+          kps check-config | grep -q '^configuration OK'
 
   live:
     name: Live preflight against Arbitrum Sepolia
