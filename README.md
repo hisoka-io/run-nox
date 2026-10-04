@@ -123,18 +123,32 @@ docker compose up -d
 ## KPS Entry (optional)
 
 `nox-kps` lets wallets and browsers reach your node directly over [KPS](https://github.com/ethereum/kps):
-WebRTC for browsers and QUIC for native clients, both on one UDP port, without a domain name or TLS
-certificate to manage. Clients pin the sidecar's certificate hash, which is part of the address they dial. The
-sidecar runs next to the node under the Compose profile `kps`. It forwards each request on an allowlisted route
-(packet submit, response claim, topology, health) to the node's loopback ingress and topology API, and enforces
-its own size, connection and time limits. Packet policy (PoW, validity, SURB IDs) stays in the node, so both
-entry paths share one policy.
+WebRTC for browsers and QUIC for native clients, both on one UDP port. Clients pin the certificate hash that is
+part of the address they dial, so the address itself authenticates your entry. `nox-kps` forwards each request on
+an allowlisted route (packet submit, response claim, topology, health) to the node's loopback ingress and
+topology API and enforces its own size, connection, rate and time limits. Packet policy (PoW, validity, SURB
+IDs) stays in the node, so both entry paths share one policy.
+
+`nox-kps` ships in the Nox node image. Under the Compose profile `kps` it runs as its own container from the same
+`NOX_IMAGE` digest as the node, with its own UID (`10002`), a 512 MB memory limit and its own restarts. A release
+record that carries it names the `nox-kps` version in `release.noxKps`; check yours with:
+
+```bash
+python3 -c 'import json; print(json.load(open("deployment.json"))["release"].get("noxKps"))'
+```
+
+A version such as `0.1.0` means the pinned image serves KPS. `nox-kps-preflight` checks this, together with
+`nox-kps.toml` and `config.toml`, every time the sidecar starts.
 
 You need:
 
 - UDP `15005` open inbound in your cloud firewall and host firewall (see Host Firewall below)
-- `NOX_KPS_IMAGE`: the immutable `ghcr.io/hisoka-io/nox-kps@sha256:` digest from the `nox-kps` release record
 - The node ingress and topology API enabled on loopback, with a client IP header shared by the node and the sidecar
+- `lo` carrying only loopback addresses: `ip -brief addr show lo` prints `127.0.0.1/8` and `::1/128`. Browsers
+  dial over WebRTC, which gathers candidates from `lo`, and `nox-kps` logs a warning at startup when `lo` holds
+  another address
+- For publishing the address: your registered node key and a little Arbitrum Sepolia ETH for one transaction of
+  about 130,000 gas
 
 1. Enable the loopback ports and the header in `config.toml`, then restart the node:
 
@@ -144,6 +158,10 @@ You need:
 
    [ingress]
    client_ip_header = "x-real-ip"
+   ```
+
+   ```bash
+   docker compose restart nox
    ```
 
    The node binds these ports on all interfaces. Keep `15002` and `15003` closed to the internet with the host
@@ -159,64 +177,102 @@ You need:
 
    Optionally set `node_address` to your registered node address; `/metadata.json` shows it.
 
-3. Enable the profile and create the identity key once. The certhash it prints is the stable part of your
-   KPS address:
+3. Enable the profile and create the identity key once. The certhash it prints is the stable part of your KPS
+   address:
 
    ```bash
-   export NOX_KPS_IMAGE='ghcr.io/hisoka-io/nox-kps@sha256:<digest from the release record>'
-   echo 'COMPOSE_PROFILES=kps' >> .env   # COMPOSE_PROFILES=exit,kps on an exit
-   docker compose run --rm nox-kps-init
-   docker compose run --rm --no-deps nox-kps nox-kps init
+   if grep -q '^COMPOSE_PROFILES=' .env; then
+     sed -i 's/^COMPOSE_PROFILES=\(.*\)$/COMPOSE_PROFILES=\1,kps/' .env
+   else
+     echo 'COMPOSE_PROFILES=kps' >> .env
+   fi
+   grep '^COMPOSE_PROFILES=' .env   # kps on a relay, exit,kps on an exit
+   docker compose run --rm nox-kps-admin init
    ```
 
-   `nox-kps-init` gives the two `nox-kps` volumes to UID `10002`. `nox-kps init` writes the key to the
-   `nox-kps-identity` volume and prints `certhash: <certhash>`, your address and a line
-   `config line: expected_certhash = "<certhash>"`. Running `init` again leaves an existing key untouched.
+   `nox-kps-admin` runs one-off `nox-kps` commands with the sidecar's image, UID, config and volumes, with
+   networking turned off. It first runs `nox-kps-init`, which gives the two `nox-kps` volumes to UID `10002`.
+   `init` writes the key to the `nox-kps-identity` volume and prints `certhash: <certhash>`, your address and a
+   line `config line: expected_certhash = "<certhash>"`. On a host that already has a key, `init` keeps it and
+   says so; `address` prints its certhash.
 
-4. Back up the key, then put the certhash in `nox-kps.toml`:
+4. Back up the key, put the certhash in `nox-kps.toml`, and check the result:
 
    ```bash
-   (umask 077; docker compose run --rm --no-deps -T nox-kps cat /var/lib/nox-kps/kps.key > kps.key.backup)
+   (umask 077; docker compose run --rm -T --entrypoint cat nox-kps-admin /var/lib/nox-kps/kps.key > kps.key.backup)
    sed -i 's/^expected_certhash = ""/expected_certhash = "<certhash>"/' nox-kps.toml
+   docker compose run --rm nox-kps-admin check-config
    ```
 
    Store the backup with the node's other secrets and keep the `nox-kps-identity` volume: the certhash in your
    address is derived from this key. `nox-kps run` serves only the identity whose certhash matches
-   `expected_certhash`, which keeps your published address bound to this key.
+   `expected_certhash`, which keeps your published address bound to this key. `check-config` prints
+   `configuration OK`, the limits in effect and the identity's certhash.
 
 5. Start the sidecar and check it:
 
    ```bash
    docker compose up -d
-   docker compose ps nox-kps                        # healthy
-   docker compose exec nox-kps nox-kps address      # prints <public ip>:15005:<certhash>
+   docker compose ps nox-kps                          # healthy
+   docker compose run --rm nox-kps-admin address      # <public ip>:15005:<certhash> and the metadataUrl
    ```
 
-   `nox-kps-preflight` runs first and starts the sidecar only when the image is a digest, the public IP is
-   set and public, `expected_certhash` holds a certhash, the upstreams are loopback on the enabled ingress and
-   topology ports, the client IP headers match, the admin listener is loopback, and UDP `15005` is free.
+   `nox-kps-preflight` runs first and starts the sidecar once the image matches the release record and ships
+   `nox-kps`, the public IP is set and public, `expected_certhash` holds a certhash, the upstreams are loopback on
+   the enabled ingress and topology ports, the client IP headers match, the admin listener is loopback, and UDP
+   `15005` is free.
 
    From another network, dial `<public ip>:15005:<certhash>` with a KPS client (`@kpstreams/quic-client` or
    `@kpstreams/webrtc-client`) and request `GET /health` and `GET /topology`.
 
-6. Publish the address in the registry. `updateMetadataUrl` is self-service: it must be sent by your registered
-   node address, which is the key in `NOX__ETH_WALLET_PRIVATE_KEY`. Import that key into an encrypted Foundry
-   keystore once (the command prompts for it, so it never appears in your shell history), then send:
+6. Publish the address in the registry. `updateMetadataUrl` is self-service: your registered node address sends
+   it, which is the key in `NOX__ETH_WALLET_PRIVATE_KEY` (`grep 'Address (for registration)' .env` shows the
+   address). Import that key into an encrypted Foundry keystore once (the command prompts for it, so it stays
+   out of your shell history):
 
    ```bash
    cast wallet import nox-node --interactive
+   ```
+
+   A relay sends the transaction while it runs. An exit sends transactions from this key itself, so it follows
+   the same order as [Claiming Exit Credit](#claiming-exit-credit): wait for `nox_eth_tx_pending 0`, stop the
+   node, send, then start it again, so the node reads the new nonce:
+
+   ```bash
+   # Exits only, before sending:
+   curl --fail --silent http://127.0.0.1:15001/metrics | grep '^nox_eth_tx_pending '   # wait until it reads 0
+   docker compose stop nox
+
    cast send 0xF7BFf88A1412054a001Dc4b8aCBddAd6F9b26cB6 "updateMetadataUrl(string)" \
      "kps:<public ip>:15005:<certhash>/metadata.json" \
      --account nox-node --rpc-url https://sepolia-rollup.arbitrum.io/rpc
    cast call 0xF7BFf88A1412054a001Dc4b8aCBddAd6F9b26cB6 "relayers(address)(bytes32,string,string,string,uint256,uint256,bool,uint8,bool)" \
      <node address> --rpc-url https://sepolia-rollup.arbitrum.io/rpc   # 4th value is your metadataUrl
+
+   # Exits only, after the receipt:
+   docker compose up -d
    ```
 
-   The transaction costs about 130,000 gas. Publish only after step 5 succeeds from another network, and
-   keep the public IP stable: the IP and certhash together are the address clients pin.
+   Publish once step 5 succeeds from another network, and keep the public IP stable (an Elastic IP on AWS):
+   the IP and certhash together are the address clients pin.
 
-To stop serving KPS, clear the published address first, then stop the sidecar. The identity volume stays, so
-re-enabling later keeps the same address:
+### Worker Bundles (optional)
+
+`nox-kps` can serve the anon-rpc worker bundle as a `kps:` resolver. The service mounts the bundle volume
+read-only; `nox-kps-admin` adds a file under its keccak-256 name and prints the resolver string:
+
+```bash
+docker compose run --rm -v "$PWD/anon-rpc-worker.js:/in/anon-rpc-worker.js:ro" \
+  nox-kps-admin bundle add /in/anon-rpc-worker.js
+docker compose run --rm nox-kps-admin bundle list
+```
+
+The running sidecar picks up new bundles within a minute.
+
+### Stop Serving KPS
+
+Clear the published address first (exits stop the node around the transaction, as in step 6), then stop the
+sidecar. The identity volume stays, so re-enabling later keeps the same address:
 
 ```bash
 cast send 0xF7BFf88A1412054a001Dc4b8aCBddAd6F9b26cB6 "updateMetadataUrl(string)" "" \
@@ -225,19 +281,36 @@ docker compose stop nox-kps
 docker compose rm -f nox-kps nox-kps-init nox-kps-preflight
 ```
 
-Then remove `kps` from `COMPOSE_PROFILES` in `.env`. Restoring `ingress_port = 0` and `topology_api_port = 0`
-is optional and needs a node restart.
+Then remove `kps` from `COMPOSE_PROFILES` in `.env`. Setting `ingress_port = 0` and `topology_api_port = 0`
+again is optional and takes a node restart.
 
 ### Host Firewall
 
-Open UDP `15005` and keep the loopback ports closed to the internet. With `ufw` (default deny incoming):
+KPS needs inbound UDP `15005` from anywhere, in two places.
+
+**Cloud firewall.** Allow UDP `15005` from `0.0.0.0/0` (and `::/0` on IPv6 hosts). For an AWS security group:
+
+```bash
+aws ec2 authorize-security-group-ingress --group-id <security group id> \
+  --ip-permissions 'IpProtocol=udp,FromPort=15005,ToPort=15005,IpRanges=[{CidrIp=0.0.0.0/0,Description=nox-kps}]'
+```
+
+**Host firewall.** Open UDP `15005`, keep TCP `15002`-`15004` and `15006` reachable from the host only, and
+limit how fast one source can open new KPS sessions (20 per second, burst 40; sessions already open keep
+flowing). With `ufw` (default deny incoming), add the limit to `/etc/ufw/before.rules`, inside the `*filter`
+section before `COMMIT`:
+
+```text
+-A ufw-before-input -p udp --dport 15005 -m conntrack --ctstate NEW -m hashlimit --hashlimit-mode srcip --hashlimit-above 20/second --hashlimit-burst 40 --hashlimit-name nox-kps-new -j DROP
+```
 
 ```bash
 # keep your existing SSH rule
 sudo ufw allow 15005/udp
 sudo ufw allow 15000/tcp
 sudo ufw allow 15001/tcp
-sudo ufw status numbered   # 15002, 15003, 15004 and 15006 must not appear
+sudo ufw reload
+sudo ufw status numbered   # lists SSH, 15000/tcp, 15001/tcp and 15005/udp
 ```
 
 With plain `iptables`, put the rules in a script that a systemd oneshot unit runs at boot, so they persist:
@@ -245,15 +318,14 @@ With plain `iptables`, put the rules in a script that a systemd oneshot unit run
 ```bash
 iptables -N NOX-FW 2>/dev/null || iptables -F NOX-FW
 iptables -A NOX-FW -i lo -j RETURN
-# one source may open 20 new KPS sessions per second (burst 40); its open sessions are unaffected
 iptables -A NOX-FW -p udp --dport 15005 -m conntrack --ctstate NEW -m hashlimit --hashlimit-mode srcip \
   --hashlimit-above 20/second --hashlimit-burst 40 --hashlimit-name nox-kps-new -j DROP
-iptables -A NOX-FW -p udp --dport 15005 -j RETURN
+iptables -A NOX-FW -p udp --dport 15005 -j ACCEPT
 iptables -A NOX-FW -p tcp -m multiport --dports 15002,15003,15004,15006 -j DROP
 iptables -C INPUT -j NOX-FW 2>/dev/null || iptables -I INPUT 1 -j NOX-FW
 ```
 
-Repeat with `ip6tables` on hosts with IPv6. Check from another network that UDP `15005` answers a KPS dial and
+Repeat with `ip6tables` on hosts with IPv6. From another network, check that UDP `15005` answers a KPS dial and
 that TCP `15002`, `15003` and `15006` refuse connections.
 
 ## Target Network Configuration
@@ -292,6 +364,28 @@ bash scripts/test-preflight.sh
 
 `--check-rpc` runs the same on-chain checks as preflight before the file is written. After the change merges,
 operators run `git pull` and copy the manifest to `deployment.json` again.
+
+### Pinning a Node Release
+
+Node images are built by the `hisoka-io/nox` release workflow from a version tag; the manifest pins one by
+digest. A release that ships `nox-kps` also records its `nox-kps` version, which turns on the Compose `kps`
+profile. Maintainers pin a release by regenerating the manifest from itself with the new digest:
+
+```bash
+NEW_IMAGE='ghcr.io/hisoka-io/nox@sha256:<digest of the release tag>'
+docker pull "$NEW_IMAGE"
+docker run --rm "$NEW_IMAGE" nox-kps --version   # a release that ships nox-kps prints "nox-kps X.Y.Z"
+python3 scripts/make-deployment-manifest.py configs/arbitrum-sepolia.deployment.json \
+  --nox-image "$NEW_IMAGE" --preflight-image "$NOX_PREFLIGHT_IMAGE" \
+  --nox-kps-version X.Y.Z \
+  --check-rpc https://arbitrum-sepolia-rpc.publicnode.com \
+  --out configs/arbitrum-sepolia.deployment.json
+bash scripts/test-preflight.sh
+```
+
+Pass `--nox-kps-version` only with the version the image printed. Update the image digest in "Current
+Deployment" and `.env.example` in the same change. CI then runs `nox keygen`, `check-config` and, for a release
+with `release.noxKps`, `nox-kps --version` and `nox-kps check-config` on the pinned image.
 
 The retired April 2026 registry exposes an older profile ABI and is not compatible with the current complete
 topology verification. Registry, indexer, SDK, node image, and operator manifest roll out as one release.
@@ -351,7 +445,15 @@ curl --fail http://127.0.0.1:15001/topology
 # Exits only:
 docker compose logs --tail 100 price-server
 curl --fail http://127.0.0.1:15004/health
+# KPS entry only:
+docker compose ps nox-kps
+docker compose logs --tail 100 nox-kps
+curl --fail --silent http://127.0.0.1:15006/metrics | grep '^nox_kps_connections'
 ```
+
+`nox-kps` logs counts only (connections, streams, rejections) and serves Prometheus metrics on
+`127.0.0.1:15006`. Watch `nox_kps_connections_rejected_total`, `nox_kps_rate_limited_total` and
+`nox_kps_upstream_errors_total`; a rising upstream error count means the node's ingress needs attention.
 
 For exits, alert on wallet balance, stale-price and unsupported-token rejections, rejected profitability decisions, submission ambiguity, replacement exhaustion, and unreconciled outbox records. Preserve the outbox volume across restarts and upgrades.
 
@@ -393,6 +495,9 @@ log volumes are migrated. `/etc/nox` remains `root:root` mode `0755` in the imag
 read-only bind mount. `/var/lib/nox` is `10001:10001` mode `0750`. The live config is mode `0644` and owned by
 UID 1000, so the runtime only needs read access. Do not chown the config or `/etc/nox`. After migration, verify
 all three writable mounts report numeric owner `10001:10001` from the target image before starting the canary.
+
+`nox-kps` runs from the same `NOX_IMAGE` as the node, so `docker compose up -d` after a pin upgrades both. Keep
+the `nox-kps-identity` volume across upgrades and rollbacks: it holds the key behind your published KPS address.
 
 Promote relays first, then one exit, then the remaining exits. Keep the previous digest and snapshots until the observation window completes.
 
