@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preflight for the optional nox-kps sidecar (Compose profile "kps").
 
-usage: preflight_kps.py <nox-kps.toml> <config.toml> <deployment.json> <nox-image>
+usage: preflight_kps.py <nox-kps.toml> <config.toml> <deployment.json> <nox-image> [--bridge]
 
 nox-kps ships in the node image and runs from the same digest as the node.
 Checks, without network access and without reading any secret:
@@ -19,6 +19,13 @@ Checks, without network access and without reading any secret:
     [ingress] client_ip_header, so per-IP rate limits see the real client address
   - admin_listen is loopback-only
   - the UDP port is free, or held by the nox-kps UID itself (a restart)
+
+With --bridge (Compose profile "kps-bridge", README "Running a Bridge") the file is
+nox-kps-bridge.toml for a second, unpublished nox-kps on an extra public IP:
+  - listen may also bind one address of this host (the private address that the extra
+    public IP maps to), so the bridge answers only there
+  - its UDP and admin ports differ from the published entry's (15005, 15006)
+  - node_address stays empty, so /metadata.json does not name the node
 
 Set ingress_port, topology_api_port and [ingress] client_ip_header in config.toml:
 this check reads the file, not NOX__ environment overrides.
@@ -51,7 +58,14 @@ INIT_HINT = (
     "run `docker compose run --rm nox-kps-admin init` once, back up the key, then copy the printed "
     "expected_certhash line into nox-kps.toml (README \"KPS Entry\")"
 )
+BRIDGE_INIT_HINT = (
+    "run `docker compose run --rm nox-kps-bridge-admin init` once, back up the key, then copy the printed "
+    "expected_certhash line into nox-kps-bridge.toml (README \"Running a Bridge\")"
+)
 NOX_KPS_UID = 10002
+# The published entry's ports (configs/nox-kps.toml); a bridge uses its own.
+ENTRY_UDP_PORT = 15005
+ENTRY_ADMIN_PORT = 15006
 PROC_NET = (Path("/proc/net/udp"), Path("/proc/net/udp6"))
 
 
@@ -161,10 +175,12 @@ def udp_port_owners(port: int) -> set[int]:
 
 
 def main(argv: list[str]) -> None:
-    if len(argv) != 5:
-        fail("usage: preflight_kps.py <nox-kps.toml> <config.toml> <deployment.json> <nox-image>")
+    bridge = argv[5:] == ["--bridge"]
+    if len(argv) != 5 and not bridge:
+        fail("usage: preflight_kps.py <nox-kps.toml> <config.toml> <deployment.json> <nox-image> [--bridge]")
+    label = "nox-kps-bridge.toml" if bridge else "nox-kps.toml"
     kps_version = release_kps_version(Path(argv[3]), argv[4])
-    kps_config = load(Path(argv[1]), "nox-kps.toml")
+    kps_config = load(Path(argv[1]), label)
     node = load(Path(argv[2]), "config.toml")
 
     unknown = set(kps_config) - KEYS
@@ -180,7 +196,12 @@ def main(argv: list[str]) -> None:
             fail(f"nox-kps.toml {name} must be a value, not a [{name}] table")
 
     listen_ip, kps_port = socket_address(kps_config.get("listen", "[::]:15005"), "listen")
-    if not listen_ip.is_unspecified:
+    if bridge:
+        if listen_ip.is_loopback or listen_ip.is_multicast:
+            fail("bridge listen must be 0.0.0.0, [::] or this host's address for the bridge IP (such as \"10.0.1.23:15007\")")
+        if kps_port == ENTRY_UDP_PORT:
+            fail(f"bridge listen uses UDP {ENTRY_UDP_PORT}, the published entry's port: give the bridge its own, such as 15007")
+    elif not listen_ip.is_unspecified:
         fail("listen must bind 0.0.0.0 or [::]: cloud public IPs are NATed and not on any interface")
     if kps_config.get("allow_private_advertise", False) is not False:
         fail("allow_private_advertise is for local test beds; remove it and list your public IP in advertise")
@@ -204,10 +225,12 @@ def main(argv: list[str]) -> None:
         fail(f"key_file must be inside {IDENTITY_DIR} (the nox-kps-identity volume)")
     expected = kps_config.get("expected_certhash", "")
     if not isinstance(expected, str) or expected.strip() == "":
-        fail(f"expected_certhash is empty, so nox-kps would refuse to run: {INIT_HINT}")
+        fail(f"expected_certhash is empty, so nox-kps would refuse to run: {BRIDGE_INIT_HINT if bridge else INIT_HINT}")
     if CERTHASH.fullmatch(expected) is None:
         fail(f"expected_certhash must be the certhash `nox-kps init` printed (\"uEi\" + 44 characters; got {expected!r})")
     node_address = kps_config.get("node_address", "")
+    if bridge and node_address != "":
+        fail("bridge node_address must stay empty: a bridge is unpublished and its /metadata.json does not name the node")
     if not isinstance(node_address, str) or (node_address and NODE_ADDRESS.fullmatch(node_address) is None):
         fail(f"node_address must be empty or your 0x-prefixed registered node address (got {node_address!r})")
     keccak_dir = kps_config.get("keccak_dir", BUNDLE_DIR)
@@ -243,6 +266,8 @@ def main(argv: list[str]) -> None:
     admin_port = loopback_host_port(kps_config.get("admin_listen", "127.0.0.1:15006"), "admin_listen", "127.0.0.1:15006")
     if admin_port in {ingress_port, topology_port, metrics_port}:
         fail(f"admin_listen port {admin_port} collides with a node port")
+    if bridge and admin_port == ENTRY_ADMIN_PORT:
+        fail(f"bridge admin_listen uses {ENTRY_ADMIN_PORT}, the published entry's admin port: use 127.0.0.1:15008")
     if kps_port in {node_port(node, "p2p_port"), ingress_port, topology_port, metrics_port}:
         fail(f"listen port {kps_port} collides with a node port")
 
@@ -252,7 +277,7 @@ def main(argv: list[str]) -> None:
         fail(f"UDP {kps_port} is already in use by UID(s) {sorted(foreign)}; nox-kps needs it")
 
     print(
-        f"nox-kps {kps_version} preflight passed: UDP {kps_port} on {', '.join(map(str, advertise))}, certhash {expected.strip()}, "
+        f"nox-kps {kps_version} {'bridge ' if bridge else ''}preflight passed: UDP {kps_port} on {', '.join(map(str, advertise))}, certhash {expected.strip()}, "
         f"upstreams 127.0.0.1:{ingress_port}/{topology_upstream}, client IP header {header}"
     )
 

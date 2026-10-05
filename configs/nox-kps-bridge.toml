@@ -1,0 +1,42 @@
+# nox-kps bridge config (Compose profile "kps-bridge"). Copy to ./nox-kps-bridge.toml.
+# A bridge is a second nox-kps on an extra public IP of this host that is never
+# published in the registry. Share its address only with the people it serves
+# (README "Running a Bridge"). `nox-kps-bridge-preflight` checks this file on
+# each start.
+
+# The bridge's own UDP port (the published entry uses 15005). Binding this
+# host's address for the bridge IP keeps the bridge off the published IP: on
+# AWS that is the secondary private IP the extra Elastic IP maps to, for
+# example "10.0.1.23:15007". "0.0.0.0:15007" also works together with the host
+# firewall rule in the README.
+listen = "0.0.0.0:15007"
+
+# REQUIRED: the extra public IP that people dial. Keep it out of the registry:
+# wallets reach it through their "bridges" list.
+advertise = ["203.0.113.20"]
+
+# The bridge identity, created once by `nox-kps-bridge-admin init` in the
+# nox-kps-bridge-identity volume. Its certhash is unrelated to your published entry.
+key_file = "/var/lib/nox-kps/kps.key"
+
+# REQUIRED before `up`: the certhash `nox-kps-bridge-admin init` printed.
+expected_certhash = ""
+
+# Stays empty for a bridge, so /metadata.json does not name your node.
+node_address = ""
+
+# The node's loopback ingress and topology API, as for the published entry.
+upstream_ingress = "127.0.0.1:15002"
+upstream_topology = "127.0.0.1:15003"
+
+# Must equal [ingress] client_ip_header in config.toml.
+client_ip_header = "x-real-ip"
+
+# The bridge serves the same worker bundles as the entry (read-only), so people
+# behind a censor can fetch the anon-rpc worker through it as well.
+keccak_dir = "/var/lib/nox-kps/keccak"
+
+# Prometheus /metrics and /healthz on loopback; the published entry uses 15006.
+admin_listen = "127.0.0.1:15008"
+
+log_format = "json"
