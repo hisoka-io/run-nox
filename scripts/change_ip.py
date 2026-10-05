@@ -313,6 +313,8 @@ class KpsConfig:
     port: int
     certhash: str
     advertise: list[str]
+    # The node address /metadata.json names ("" when unset): wallets map a gateway to its node through it.
+    node_address: str = ""
 
 
 def load_kps_config(path: Path) -> KpsConfig:
@@ -327,7 +329,15 @@ def load_kps_config(path: Path) -> KpsConfig:
     advertise = config.get("advertise", [])
     if not isinstance(advertise, list) or not all(isinstance(ip, str) for ip in advertise):
         fail(f"{path} advertise must be a list of IP strings")
-    return KpsConfig(int(port_text), certhash.strip(), list(advertise))
+    node_address = config.get("node_address", "")
+    if not isinstance(node_address, str) or (node_address.strip() and ADDRESS.fullmatch(node_address.strip()) is None):
+        fail(f"{path} node_address {node_address!r} is not a 0x-prefixed 20-byte address")
+    return KpsConfig(int(port_text), certhash.strip(), list(advertise), node_address.strip())
+
+
+def names_node(config: KpsConfig, address: str) -> bool:
+    """True when nox-kps.toml node_address is this node, so the KPS address works as a wallet gateway."""
+    return config.node_address.lower() == address.lower()
 
 
 # --------------------------------------------------------------------------- chain
@@ -531,10 +541,20 @@ def run_command(command: list[str], timeout: float) -> tuple[int, str]:
     return done.returncode, (done.stdout + done.stderr).strip()
 
 
-def kps_checks(kps_exec: list[str], config: KpsConfig, config_path: Path, new_ip: str) -> list[tuple[bool, str]]:
-    """Ties the running sidecar to the new address before anything is signed."""
+def kps_checks(
+    kps_exec: list[str], config: KpsConfig, config_path: Path, new_ip: str, node: str
+) -> list[tuple[bool, str]]:
+    """Ties the running sidecar to the new address and this node before anything is signed."""
     address = kps_address(new_ip, config.port, config.certhash)
     results: list[tuple[bool, str]] = []
+    if config.node_address and not names_node(config, node):
+        results.append(
+            (
+                False,
+                f"{config_path} node_address {config.node_address} is another node than {node}: /metadata.json would "
+                "name the wrong member and wallets refuse the address; set node_address to this node's address",
+            )
+        )
     if new_ip in config.advertise:
         extra = [ip for ip in config.advertise if ip != new_ip]
         note = f" (also advertises {', '.join(extra)}; drop addresses this host no longer holds)" if extra else ""
@@ -712,7 +732,7 @@ def main(argv: list[str], out: Callable[[str], None] = print) -> int:
 
     checks: list[tuple[bool, str]] = []
     if kps_config is not None and kps_path is not None:
-        checks = kps_checks(shlex.split(args.kps_exec), kps_config, kps_path, new_ip)
+        checks = kps_checks(shlex.split(args.kps_exec), kps_config, kps_path, new_ip, address)
         out("checks")
         for ok, message in checks:
             out(f"  {'ok  ' if ok else 'FAIL'} {message}")
@@ -733,7 +753,8 @@ def main(argv: list[str], out: Callable[[str], None] = print) -> int:
         estimates = ", ".join(f"{name} {value}" for name, value in gas.items())
         out(f"gas          {estimates}; balance {before.balance / 1e18:.6f} ETH, needs {needed_wei / 1e18:.6f} ETH (1.5x)")
 
-    print_client_view(out, url_plan.target, target_kps, before.role)
+    gateway_ready = kps_config is not None and names_node(kps_config, address)
+    print_client_view(out, url_plan.target, target_kps, before.role, gateway_ready)
 
     failed = [message for ok, message in checks if not ok]
     if not args.send:
@@ -797,12 +818,16 @@ def main(argv: list[str], out: Callable[[str], None] = print) -> int:
     return 0
 
 
-def print_client_view(out: Callable[[str], None], url: str, kps: str | None, role: int) -> None:
+def print_client_view(out: Callable[[str], None], url: str, kps: str | None, role: int, gateway_ready: bool) -> None:
     out("what clients will see")
     out(f"  peers and route hops   {url}")
     if kps is not None:
         out(f"  KPS entry address      {kps}")
-        out(f"  wallet config syntax   {{\"gateways\": [\"{kps}\"]}}")
+        if gateway_ready:
+            out(f"  wallet config syntax   {{\"gateways\": [\"{kps}\"]}}")
+        else:
+            out("  wallet gateways        set node_address in nox-kps.toml to this node's address first: wallets map a")
+            out("                         gateway to its node through /metadata.json (README \"KPS Entry\" step 2)")
     out("  identity               unchanged: address, Sphinx key and role, so routes and probation status stay")
     out("  S1 discovery clients   adopt the new location at their next registry check through the mixnet")
     out("                         (every 10 minutes by default), then cache it as a learned entry")

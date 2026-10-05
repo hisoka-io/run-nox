@@ -170,11 +170,17 @@ class Arguments(unittest.TestCase):
             d = Path(raw)
             good = write(d / "good.toml", f'listen = "0.0.0.0:15005"\nadvertise = ["{NEW_IP}"]\nexpected_certhash = "{CERT}"\n', 0o644)
             self.assertEqual(tool.load_kps_config(good), tool.KpsConfig(15005, CERT, [NEW_IP]))
+            named = write(d / "named.toml", f'listen = "0.0.0.0:15005"\nadvertise = ["{NEW_IP}"]\nexpected_certhash = "{CERT}"\nnode_address = "0x{"Ab" * 20}"\n', 0o644)
+            loaded = tool.load_kps_config(named)
+            self.assertEqual(loaded.node_address, "0x" + "Ab" * 20)
+            self.assertTrue(tool.names_node(loaded, "0x" + "ab" * 20))
+            self.assertFalse(tool.names_node(loaded, "0x" + "cd" * 20))
             for name, body, message in [
                 ("nocert", f'listen = "0.0.0.0:15005"\nadvertise = ["{NEW_IP}"]\nexpected_certhash = ""\n', "expected_certhash"),
                 ("port0", f'listen = "0.0.0.0:0"\nadvertise = ["{NEW_IP}"]\nexpected_certhash = "{CERT}"\n', "fixed UDP port"),
                 ("adv", f'listen = "0.0.0.0:15005"\nadvertise = "{NEW_IP}"\nexpected_certhash = "{CERT}"\n', "list of IP"),
                 ("toml", "listen = ", "not valid TOML"),
+                ("node", f'listen = "0.0.0.0:15005"\nadvertise = ["{NEW_IP}"]\nexpected_certhash = "{CERT}"\nnode_address = "0x12"\n', "node_address"),
             ]:
                 with self.subTest(name), self.assertRaises(tool.ChangeIpError) as raised:
                     tool.load_kps_config(write(d / f"{name}.toml", body, 0o644))
@@ -321,11 +327,11 @@ class EndToEnd(unittest.TestCase):
     def tearDown(self) -> None:
         cast("rpc", "evm_revert", self.snapshot, "--rpc-url", self.rpc)
 
-    def run_tool(self, *argv: str, kps: bool = True) -> tuple[int | None, str]:
+    def run_tool(self, *argv: str, kps: bool = True, kps_toml: Path | None = None) -> tuple[int | None, str]:
         lines: list[str] = []
         base = ["--deployment", str(self.manifest), "--rpc-url", self.rpc, "--kps-exec", str(self.kps_exec),
                 "--compose", str(self.compose)]
-        base += ["--kps-config", str(self.kps_toml)] if kps else ["--no-kps"]
+        base += ["--kps-config", str(kps_toml or self.kps_toml)] if kps else ["--no-kps"]
         try:
             code: int | None = tool.main([*argv, *base], out=lines.append)
         except tool.ChangeIpError as error:
@@ -342,9 +348,16 @@ class EndToEnd(unittest.TestCase):
     def nonce(self, address: str) -> int:
         return int(cast("nonce", address, "--rpc-url", self.rpc))
 
+    def kps_toml_naming(self, node: str) -> Path:
+        return write(
+            self.dir / f"nox-kps-{node[2:10]}.toml",
+            f'listen = "0.0.0.0:15005"\nadvertise = ["{NEW_IP}"]\nexpected_certhash = "{CERT}"\nnode_address = "{node}"\n',
+            0o644,
+        )
+
     def test_dry_run_prints_values_calldata_checks_and_client_view(self) -> None:
         before = self.nonce(self.relay)
-        code, out = self.run_tool("--ip", NEW_IP, "--key-file", str(self.relay_key))
+        code, out = self.run_tool("--ip", NEW_IP, "--key-file", str(self.relay_key), kps_toml=self.kps_toml_naming(self.relay))
         self.assertEqual(code, 0, out)
         new_url = f"/ip4/{NEW_IP}/tcp/15000/p2p/{PEER}"
         new_meta = f"kps:{NEW_IP}:15005:{CERT}/metadata.json"
@@ -361,6 +374,21 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("rerun with --send", out)
         self.assertEqual(self.nonce(self.relay), before)
         self.assertEqual(self.profile(self.relay).url, f"/ip4/{OLD_IP}/tcp/15000/p2p/{PEER}")
+
+    def test_gateway_line_needs_node_address(self) -> None:
+        # Empty node_address: the move is published, but wallets cannot use the address as a gateway yet.
+        code, out = self.run_tool("--ip", NEW_IP, "--key-file", str(self.relay_key))
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('{"gateways"', out)
+        self.assertIn("set node_address in nox-kps.toml", out)
+        # node_address naming another node: /metadata.json would name the wrong member, so the check fails.
+        code, out = self.run_tool("--ip", NEW_IP, "--key-file", str(self.relay_key), kps_toml=self.kps_toml_naming(self.exit))
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"node_address {self.exit} is another node than {self.relay}", out)
+        before = self.nonce(self.relay)
+        code, out = self.run_tool("--ip", NEW_IP, "--key-file", str(self.relay_key), "--send", kps_toml=self.kps_toml_naming(self.exit))
+        self.assertNotEqual(code, 0, out)
+        self.assertEqual(self.nonce(self.relay), before)
 
     def test_dry_run_with_address_only(self) -> None:
         code, out = self.run_tool("--ip", NEW_IP, "--address", self.relay)
