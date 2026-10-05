@@ -25,7 +25,8 @@ nox-kps-bridge.toml for a second, unpublished nox-kps on an extra public IP:
   - listen may also bind one address of this host (the private address that the extra
     public IP maps to), so the bridge answers only there
   - its UDP and admin ports differ from the published entry's (15005, 15006)
-  - node_address stays empty, so /metadata.json does not name the node
+  - node_address names the registered node, so wallets map the bridge to its node
+    through /metadata.json
 
 Set ingress_port, topology_api_port and [ingress] client_ip_header in config.toml:
 this check reads the file, not NOX__ environment overrides.
@@ -229,10 +230,13 @@ def main(argv: list[str]) -> None:
     if CERTHASH.fullmatch(expected) is None:
         fail(f"expected_certhash must be the certhash `nox-kps init` printed (\"uEi\" + 44 characters; got {expected!r})")
     node_address = kps_config.get("node_address", "")
-    if bridge and node_address != "":
-        fail("bridge node_address must stay empty: a bridge is unpublished and its /metadata.json does not name the node")
+    if bridge and node_address == "":
+        fail(
+            "bridge node_address is empty: set it to your registered node address "
+            "(`grep 'Address (for registration)' .env`); wallets map a bridge to its node through /metadata.json"
+        )
     if not isinstance(node_address, str) or (node_address and NODE_ADDRESS.fullmatch(node_address) is None):
-        fail(f"node_address must be empty or your 0x-prefixed registered node address (got {node_address!r})")
+        fail(f"node_address must be your 0x-prefixed registered node address (got {node_address!r})")
     keccak_dir = kps_config.get("keccak_dir", BUNDLE_DIR)
     if keccak_dir not in ("", BUNDLE_DIR):
         fail(f"keccak_dir must be {BUNDLE_DIR!r} (the nox-kps-bundles volume) or \"\" (got {keccak_dir!r})")
@@ -276,6 +280,12 @@ def main(argv: list[str]) -> None:
     if foreign:
         fail(f"UDP {kps_port} is already in use by UID(s) {sorted(foreign)}; nox-kps needs it")
 
+    if node_address == "":
+        print(
+            "nox-kps preflight: note: node_address is empty, so /metadata.json names no node and wallets cannot use "
+            "this address as a gateway; set it to your registered node address",
+            file=sys.stderr,
+        )
     print(
         f"nox-kps {kps_version} {'bridge ' if bridge else ''}preflight passed: UDP {kps_port} on {', '.join(map(str, advertise))}, certhash {expected.strip()}, "
         f"upstreams 127.0.0.1:{ingress_port}/{topology_upstream}, client IP header {header}"

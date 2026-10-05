@@ -236,6 +236,9 @@ if ipv6_ok.returncode != 0:
 with_address = run(good_kps.replace('node_address = ""', 'node_address = "0x862D6B1105bdE9d64dC5182fe3CD9d09F6F37463"'), good_node)
 if with_address.returncode != 0:
     raise SystemExit(f"a registered node_address was rejected: {with_address.stderr}")
+# An empty node_address still passes (running entries keep starting) but says what it costs.
+if "node_address is empty" not in ok.stderr or "node_address is empty" in with_address.stderr:
+    raise SystemExit(f"the empty node_address note is missing or misplaced: {ok.stderr!r} / {with_address.stderr!r}")
 valid = 3
 
 sectioned = """[kps]
@@ -317,15 +320,19 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as busy:
         raise SystemExit(f"nox-kps preflight accepted a UDP port held by another process: {result.stderr}")
 
 # Bridge mode (--bridge, configs/nox-kps-bridge.toml): the template passes once the
-# README edits are made; the bridge keeps its own ports and an empty node_address.
+# README edits are made; the bridge keeps its own ports and names its registered node.
 bridge_template = (repo / "configs" / "nox-kps-bridge.toml").read_text(encoding="utf-8")
+node_line = 'node_address = "0x862D6B1105bdE9d64dC5182fe3CD9d09F6F37463"'
 bridge_port = free_udp_port()
 bridge_listen = f'listen = "0.0.0.0:{bridge_port}"'
 good_bridge = (
     bridge_template.replace('advertise = ["203.0.113.20"]', 'advertise = ["3.239.73.250"]')
     .replace('listen = "0.0.0.0:15007"', bridge_listen)
     .replace('expected_certhash = ""', certhash_line)
+    .replace('node_address = ""', node_line)
 )
+if good_bridge.count(node_line) != 1:
+    raise SystemExit("configs/nox-kps-bridge.toml no longer has the node_address line the README edits")
 if good_bridge.count(bridge_listen) != 1 or good_bridge.count(certhash_line) != 1 or "127.0.0.1:15008" not in good_bridge:
     raise SystemExit("configs/nox-kps-bridge.toml no longer has the lines the README edits")
 bridge_ok = run(good_bridge, good_node, extra=("--bridge",))
@@ -340,11 +347,12 @@ bridge_cases = {
     "the published entry's UDP port": (good_bridge.replace(bridge_listen, 'listen = "0.0.0.0:15005"'), "own, such as 15007"),
     "the published entry's admin port": (
         good_bridge.replace('admin_listen = "127.0.0.1:15008"', 'admin_listen = "127.0.0.1:15006"'), "127.0.0.1:15008"),
-    "a node_address on a bridge": (
-        good_bridge.replace('node_address = ""', 'node_address = "0x862D6B1105bdE9d64dC5182fe3CD9d09F6F37463"'), "stay empty"),
+    "a bridge without node_address": (good_bridge.replace(node_line, 'node_address = ""'), "bridge node_address is empty"),
+    "a bridge with a malformed node_address": (good_bridge.replace(node_line, 'node_address = "0x1234"'), "node_address must be"),
     "a loopback bridge listener": (good_bridge.replace(bridge_listen, f'listen = "127.0.0.1:{bridge_port}"'), "bridge listen"),
     "the bridge template's documentation IP": (
-        bridge_template.replace('listen = "0.0.0.0:15007"', bridge_listen).replace('expected_certhash = ""', certhash_line),
+        bridge_template.replace('listen = "0.0.0.0:15007"', bridge_listen).replace('expected_certhash = ""', certhash_line)
+        .replace('node_address = ""', node_line),
         "not a public IP"),
 }
 for label, (kps, needle) in bridge_cases.items():

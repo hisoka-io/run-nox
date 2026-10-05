@@ -121,11 +121,13 @@ jobs:
           test -n "$certhash"
           sed -i "s/^expected_certhash = \"\"/expected_certhash = \"$certhash\"/" "$work/nox-kps.toml"
           kps check-config | grep -q '^configuration OK'
-          # The bridge template: its own identity, port 15007 and admin 15008.
+          # The bridge template: its own identity, port 15007, admin 15008 and the node's address.
           bridge="$(mktemp -d)"
           mkdir "$bridge/keccak"
           chmod 0777 "$bridge" "$bridge/keccak"
-          sed 's/"203.0.113.20"/"198.51.100.21"/' configs/nox-kps-bridge.toml > "$bridge/nox-kps.toml"
+          sed -e 's/"203.0.113.20"/"198.51.100.21"/' \
+            -e 's/^node_address = ""/node_address = "0x862D6B1105bdE9d64dC5182fe3CD9d09F6F37463"/' \
+            configs/nox-kps-bridge.toml > "$bridge/nox-kps.toml"
           kps_bridge() {
             docker run --rm --user 10002:10002 --network none --entrypoint nox-kps \
               -e NOX_KPS_CONFIG=/etc/nox-kps/config.toml \

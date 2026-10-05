@@ -177,7 +177,13 @@ You need:
    sed -i 's/"203.0.113.10"/"<your public IP>"/' nox-kps.toml
    ```
 
-   Optionally set `node_address` to your registered node address; `/metadata.json` shows it.
+   Set `node_address` to your registered node address (`grep 'Address (for registration)' .env`).
+   `/metadata.json` shows it, and wallets that dial your entry as a gateway or a learned anchor map the address to
+   your node through it:
+
+   ```bash
+   sed -i 's/^node_address = ""/node_address = "<your node address>"/' nox-kps.toml
+   ```
 
 3. Enable the profile and create the identity key once. The certhash it prints is the stable part of your KPS
    address:
@@ -425,10 +431,12 @@ the host. The published `kps` profile is optional.
    cp configs/nox-kps-bridge.toml nox-kps-bridge.toml
    sed -i 's/"203.0.113.20"/"<extra public IP>"/' nox-kps-bridge.toml
    sed -i 's/^listen = .*/listen = "<secondary private ip>:15007"/' nox-kps-bridge.toml
+   sed -i 's/^node_address = ""/node_address = "<your node address>"/' nox-kps-bridge.toml
    ```
 
    On a host whose extra public IP sits directly on an interface, use that IP in `listen`. The bridge keeps UDP
-   `15007`, admin `127.0.0.1:15008` and an empty `node_address`; `nox-kps-bridge-preflight` checks all three.
+   `15007`, admin `127.0.0.1:15008` and your registered node address in `node_address` (wallets map the bridge to
+   your node through its `/metadata.json`); `nox-kps-bridge-preflight` checks all three.
 
 3. Enable the profile, create the bridge identity, back it up and record its certhash:
 
@@ -475,6 +483,9 @@ the host. The published `kps` profile is optional.
    { "bridges": ["<extra public IP>:15007:<certhash>"] }
    ```
 
+Bridges serve wallets for nodes in the worker bundle's snapshot; a node that registered later can serve bridges
+from the next worker bundle release.
+
 If a censor blocks the bridge IP, associate a fresh Elastic IP with the secondary private IP, update `advertise`,
 run `docker compose up -d --force-recreate nox-kps-bridge` and share the new address. For a new certhash as well,
 stop the bridge, remove its `nox-kps-bridge-identity` volume and run `init` again.
@@ -500,13 +511,13 @@ config is empty (`{}`) starts from them:
 
 Anchors provide reachability: wallets treat what an anchor serves as hints and take membership from the
 registry check, with the bundle snapshot as the floor. Every operator entry with a published KPS address becomes
-an entry candidate straight from that check, and wallets can list your entry under `gateways`
-(`{"gateways": ["<ip>:15005:<certhash>"]}`).
+an entry candidate straight from that check. With `node_address` set (KPS Entry step 2), wallets can also list your
+entry under `gateways` (`{"gateways": ["<ip>:15005:<certhash>"]}`) once your node is in a worker bundle's snapshot.
 
 ### Probation for New Nodes
 
-A node that joins after the bundle's snapshot is on probation for its first 14 days, counted from its
-registration block. Wallets place at most one probation node on each route, so every three-hop route keeps at
+A node that joins after the bundle's snapshot is on probation for 14 days, counted from when each wallet first
+sees it in the registry. Wallets place at most one probation node on each route, so every three-hop route keeps at
 least two snapshot members; a layer that has only probation nodes still uses them. Probation ends after 14 days,
 or earlier when a bundle release adds the node to its snapshot. Changing your IP keeps your identity and your
 probation clock.

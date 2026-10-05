@@ -22,7 +22,9 @@ key_file = "/var/lib/nox-kps/kps.key"
 # REQUIRED before `up`: the certhash `nox-kps-bridge-admin init` printed.
 expected_certhash = ""
 
-# Stays empty for a bridge, so /metadata.json does not name your node.
+# REQUIRED: your registered node address (`grep 'Address (for registration)' .env`).
+# Wallets map a bridge to its node through /metadata.json, so the bridge names
+# the node; people who hold the bridge address learn nothing new from it.
 node_address = ""
 
 # The node's loopback ingress and topology API, as for the published entry.
