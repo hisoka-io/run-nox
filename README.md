@@ -6,6 +6,7 @@ This repository is the canonical operator kit for a [NOX](https://github.com/his
 
 - Docker Engine 20.10 or newer and Docker Compose v2.20 or newer
 - Python 3.11 or newer for TOML preflight validation
+- [Foundry](https://getfoundry.sh) `cast` for registry transactions (publishing a KPS address, changing your IP)
 - A public IPv4 address with TCP ports `15000` (libp2p) and `15001` (metrics, read-only) open
 - An Arbitrum Sepolia RPC endpoint. Exits need one that serves `eth_simulateV1`, such as
   `https://arbitrum-sepolia-rpc.publicnode.com`
@@ -254,8 +255,11 @@ You need:
    docker compose up -d
    ```
 
-   Publish once step 5 succeeds from another network, and keep the public IP stable (an Elastic IP on AWS):
-   the IP and certhash together are the address clients pin.
+   Publish once step 5 succeeds from another network. `scripts/change_ip.py` with your current IP sends the same
+   transaction after checking the running sidecar (see [Changing Your IP](#changing-your-ip)).
+
+   The certhash is the stable part of your address: keep the `nox-kps-identity` volume and its backup. The IP can
+   move whenever you need it to; clients look the address up in the registry.
 
 ### Worker Bundles (optional)
 
@@ -328,6 +332,184 @@ iptables -C INPUT -j NOX-FW 2>/dev/null || iptables -I INPUT 1 -j NOX-FW
 
 Repeat with `ip6tables` on hosts with IPv6. From another network, check that UDP `15005` answers a KPS dial and
 that TCP `15002`, `15003` and `15006` refuse connections.
+
+## Changing Your IP
+
+Your node's identity (registered address, Sphinx key, role) lives in `NoxRegistry` and stays the same. Its
+location is two registry fields that your node key writes itself, at any time, without governance:
+
+| Field | Value | Setter |
+|---|---|---|
+| `url` | `/ip4/<ip>/tcp/15000/p2p/<peer id>` | `updateUrl(string)` |
+| `metadataUrl` (KPS entries) | `kps:<ip>:15005:<certhash>/metadata.json` | `updateMetadataUrl(string)` |
+
+`scripts/change_ip.py` moves both to a new IP. It keeps the peer ID, ports and certhash and replaces only the IP.
+By default it is a dry run: it prints both values, the calldata, a gas estimate and what clients will see, and
+signs nothing. `--send` signs with your node key. The tool needs Foundry `cast` and reads the key from your
+`.env` (`NOX__ETH_WALLET_PRIVATE_KEY`) or from a hex key file with mode `600`, and hands it to `cast` through a
+private terminal, so it stays off the command line, the environment and the output.
+
+1. Give the host its new IP. The node listens on all interfaces and keeps running.
+2. KPS entries: set the new IP in `nox-kps.toml` and recreate the sidecar, which re-runs its preflight:
+
+   ```bash
+   sed -i 's/^advertise = .*/advertise = ["<new ip>"]/' nox-kps.toml
+   docker compose up -d --force-recreate nox-kps
+   ```
+
+3. Dry run from the run-nox directory (it reads `deployment.json`, `config.toml` and `nox-kps.toml` there):
+
+   ```bash
+   python3 scripts/change_ip.py --ip <new ip> --key-file .env
+   ```
+
+   For a KPS entry it checks that `nox-kps.toml` advertises the new IP, that the running sidecar serves
+   `<new ip>:15005:<certhash>` (`nox-kps address`) and that `nox-kps healthcheck --kps` succeeds (a QUIC dial of
+   the listener with your certhash and `GET /health`). A node without a KPS entry passes `--no-kps`.
+
+4. Send:
+
+   ```bash
+   python3 scripts/change_ip.py --ip <new ip> --key-file .env --send
+   ```
+
+   The tool sends `updateUrl` and then `updateMetadataUrl` (up to about 130,000 gas each on Arbitrum Sepolia),
+   checks every receipt, event and read-back, and confirms that `topologyFingerprint()` and `relayerCount()` are
+   unchanged: both cover membership, which an IP change keeps. Values already on chain are skipped, so a second
+   run continues where the first stopped. An exit sends paid transactions from the same key, so for an exit the
+   tool waits until `nox_eth_tx_pending` reads `0`, stops the node, sends, and starts the node again so it reads
+   the new nonce.
+
+5. From another network, dial `<new ip>:15005:<certhash>` with a KPS client (KPS Entry step 5).
+
+What clients see afterwards:
+
+- Peers apply the `RelayerUpdated` event through their chain observer and dial the new `url`.
+- Wallets with S1 discovery read the registry through the mixnet (two exits, two RPC providers, one finalized
+  block) and adopt the new location at their next check, every 10 minutes by default. They keep it as a learned
+  entry for later starts.
+- Worker bundles with a pinned snapshot (before S1) use the new location from the next bundle release.
+- Your identity, and with it your probation status, stays as it is.
+
+The tool prints the command that moves the node back (`--ip <old ip> --send`). A node registered with a DNS
+multiaddr (`/dns4/<name>/...`) moves by updating its A record; the tool then updates only `metadataUrl`.
+
+## Running a Bridge
+
+A bridge helps people whose network blocks the published Nox entries. It is a second `nox-kps` on an extra public
+IP of your host, with its own identity, that stays out of the registry. You share its address with the people
+it serves, and their wallet dials only bridges (`bridges` in the anon-rpc worker config, S1). Traffic through a
+bridge enters the mixnet at your node exactly like traffic through your published entry, and the bridge serves
+the same worker bundles, so people can fetch the worker through it as well.
+
+Any relay or exit can run one. You need the node ingress on loopback (KPS Entry step 1) and a second public IP on
+the host. The published `kps` profile is optional.
+
+1. Add the extra IP. On AWS, assign a secondary private IP to the instance's network interface and associate a
+   second Elastic IP with it:
+
+   ```bash
+   aws ec2 assign-private-ip-addresses --network-interface-id <eni id> --secondary-private-ip-address-count 1
+   aws ec2 allocate-address --domain vpc
+   aws ec2 associate-address --allocation-id <new allocation id> --network-interface-id <eni id> \
+     --private-ip-address <secondary private ip>
+   ip -brief addr   # the interface lists the secondary private IP
+   ```
+
+   If `ip -brief addr` lacks the secondary address, add it with `sudo ip addr add <secondary private ip>/<prefix>
+   dev <interface>` and persist it in your network configuration.
+
+2. Create the bridge config. `listen` binds the host address for the bridge IP, so the bridge answers only there:
+
+   ```bash
+   cp configs/nox-kps-bridge.toml nox-kps-bridge.toml
+   sed -i 's/"203.0.113.20"/"<extra public IP>"/' nox-kps-bridge.toml
+   sed -i 's/^listen = .*/listen = "<secondary private ip>:15007"/' nox-kps-bridge.toml
+   ```
+
+   On a host whose extra public IP sits directly on an interface, use that IP in `listen`. The bridge keeps UDP
+   `15007`, admin `127.0.0.1:15008` and an empty `node_address`; `nox-kps-bridge-preflight` checks all three.
+
+3. Enable the profile, create the bridge identity, back it up and record its certhash:
+
+   ```bash
+   if grep -q '^COMPOSE_PROFILES=' .env; then
+     sed -i 's/^COMPOSE_PROFILES=\(.*\)$/COMPOSE_PROFILES=\1,kps-bridge/' .env
+   else
+     echo 'COMPOSE_PROFILES=kps-bridge' >> .env
+   fi
+   docker compose run --rm nox-kps-bridge-admin init
+   (umask 077; docker compose run --rm -T --entrypoint cat nox-kps-bridge-admin /var/lib/nox-kps/kps.key > kps-bridge.key.backup)
+   sed -i 's/^expected_certhash = ""/expected_certhash = "<bridge certhash>"/' nox-kps-bridge.toml
+   docker compose run --rm nox-kps-bridge-admin check-config
+   ```
+
+4. Open UDP `15007` in the cloud firewall, and in the host firewall next to the KPS rules (see Host Firewall). With
+   `iptables`, before the final `INPUT` jump:
+
+   ```bash
+   iptables -A NOX-FW -p udp --dport 15007 ! -d <secondary private ip> -j DROP
+   iptables -A NOX-FW -p udp --dport 15007 -m conntrack --ctstate NEW -m hashlimit --hashlimit-mode srcip \
+     --hashlimit-above 20/second --hashlimit-burst 40 --hashlimit-name nox-kps-bridge-new -j DROP
+   iptables -A NOX-FW -p udp --dport 15007 -j ACCEPT
+   iptables -A NOX-FW -p tcp --dport 15008 -j DROP
+   ```
+
+   The first rule keeps the bridge reachable on its own address only, which matters when `listen` is
+   `0.0.0.0:15007`.
+
+5. Start it and read the address:
+
+   ```bash
+   docker compose up -d
+   docker compose ps nox-kps-bridge                     # healthy
+   docker compose run --rm nox-kps-bridge-admin address  # address: <extra public IP>:15007:<certhash>
+   ```
+
+   `address` also prints a `metadataUrl` line. A bridge keeps it to itself: publish only your entry's address.
+
+6. Check from another network with a KPS client (`GET /health` on `<extra public IP>:15007:<certhash>`), then share
+   the address privately with the people it serves. Their wallet configuration for the anon-rpc worker:
+
+   ```json
+   { "bridges": ["<extra public IP>:15007:<certhash>"] }
+   ```
+
+If a censor blocks the bridge IP, associate a fresh Elastic IP with the secondary private IP, update `advertise`,
+run `docker compose up -d --force-recreate nox-kps-bridge` and share the new address. For a new certhash as well,
+stop the bridge, remove its `nox-kps-bridge-identity` volume and run `init` again.
+
+## Discovery: Default Anchors and Probation
+
+Wallets with S1 discovery take identity from the chain and look locations up at run time. A wallet starts by
+dialing an anchor (wallet `bridges`, else wallet `gateways`, then the default anchors, learned entries and the
+bundle snapshot), routes as soon as one answers, and then checks the registry through the mixnet: two exits ask
+two public Arbitrum Sepolia RPC providers for the same finalized block, and the wallet uses the answer when both
+agree exactly. That check is how wallets learn about new members, new IPs and removals.
+
+### Default Anchors
+
+The S1 worker bundle carries three default anchors, Hisoka entry nodes on Elastic IPs. A wallet whose worker
+config is empty (`{}`) starts from them:
+
+| Node | KPS address |
+|---|---|
+| nox-1 | `100.56.0.72:15005:uEiBVDwIs40bsslDkM-BYb2AOHw3PHe70_bj5U_09r7vdIQ` |
+| nox-2 | `3.232.137.146:15005:uEiDGVPDwsQ96ri9T5WLR6jZov_9LW-gRAgs-DN9FyKuHuw` |
+| nox-8 | `18.215.18.61:15005:uEiCStd3rfGTo0ts0lSUw5f22u93O3PLCZVWWQIv_MXHm7w` |
+
+Anchors provide reachability: wallets treat what an anchor serves as hints and take membership from the
+registry check, with the bundle snapshot as the floor. Every operator entry with a published KPS address becomes
+an entry candidate straight from that check, and wallets can list your entry under `gateways`
+(`{"gateways": ["<ip>:15005:<certhash>"]}`).
+
+### Probation for New Nodes
+
+A node that joins after the bundle's snapshot is on probation for its first 14 days, counted from its
+registration block. Wallets place at most one probation node on each route, so every three-hop route keeps at
+least two snapshot members; a layer that has only probation nodes still uses them. Probation ends after 14 days,
+or earlier when a bundle release adds the node to its snapshot. Changing your IP keeps your identity and your
+probation clock.
 
 ## Target Network Configuration
 
@@ -431,6 +613,8 @@ so it can reject a quote even when that quote is below the per-transaction ceili
 | `15004/tcp` | Price server | Exits only, bound to `127.0.0.1` |
 | `15005/udp` | KPS entry (`nox-kps`, WebRTC + QUIC) | Public, profile `kps` only |
 | `15006/tcp` | `nox-kps` metrics and health | Bound to `127.0.0.1`, profile `kps` only |
+| `15007/udp` | Bridge (`nox-kps-bridge`) | The extra bridge IP only, profile `kps-bridge` |
+| `15008/tcp` | Bridge metrics and health | Bound to `127.0.0.1`, profile `kps-bridge` only |
 
 `metrics_port` must equal `p2p_port + 1`. The Hisoka indexer derives the metrics URL from your registered
 multiaddr (TCP port + 1) and polls `/topology` and `/metrics/json` there. If it cannot reach the port, the seed

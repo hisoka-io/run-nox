@@ -122,6 +122,13 @@ print([n["status"] for n in json.load(sys.stdin)["liveness"] if n["address"] == 
 ' YOUR_ETH_ADDRESS
 ```
 
+## After Registration
+
+Wallets with S1 discovery pick your node up from the registry at their next check.
+For its first 14 days your node is on probation: wallets place at most one probation node on each route
+(README "Probation for New Nodes"). Your IP can change whenever you need it to: `scripts/change_ip.py` publishes
+the new location from your node key (README "Changing Your IP").
+
 ## Exit Funding
 
 Exit nodes require Arbitrum Sepolia ETH for gas. Fund only the public wallet address emitted by the same key
