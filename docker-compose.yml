@@ -12,7 +12,9 @@
 # Optional KPS entry (README "KPS Entry"): the "kps" profile runs nox-kps (UDP
 # 15005, WebRTC + QUIC) as its own container from the same NOX_IMAGE as the
 # node. It needs nox-kps.toml and a release record with release.noxKps; with
-# the profile off, Compose starts only the services above.
+# the profile off, Compose starts only the services above. The "kps-bridge"
+# profile runs a second, unpublished nox-kps for censored users (README
+# "Running a Bridge").
 
 services:
   preflight:
@@ -299,9 +301,160 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  # --- Optional bridge (profile "kps-bridge") ------------------------------
+  # A second nox-kps for people whose network blocks the published entries.
+  # It answers on an extra public IP of this host that stays out of the
+  # registry, with its own identity in nox-kps-bridge-identity (its certhash is
+  # unrelated to the published entry). Share <bridge ip>:15007:<certhash> out
+  # of band; wallets list it under "bridges" (README "Running a Bridge").
+  nox-kps-bridge-preflight:
+    image: ${NOX_PREFLIGHT_IMAGE:?NOX_PREFLIGHT_IMAGE must be the immutable preflight digest in deployment.json}
+    container_name: nox-kps-bridge-preflight
+    profiles: ["kps-bridge"]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: host
+    volumes:
+      - type: bind
+        source: ./nox-kps-bridge.toml
+        target: /etc/nox-kps/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config.toml
+        target: /etc/nox/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./deployment.json
+        target: /etc/nox-release/deployment.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts/preflight_kps.py
+        target: /opt/nox/preflight_kps.py
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+    entrypoint: ["python3", "/opt/nox/preflight_kps.py"]
+    command:
+      - /etc/nox-kps/config.toml
+      - /etc/nox/config.toml
+      - /etc/nox-release/deployment.json
+      - ${NOX_IMAGE:?NOX_IMAGE must be the immutable Nox digest in deployment.json}
+      - --bridge
+    restart: "no"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  nox-kps-bridge-init:
+    image: ${NOX_IMAGE:?NOX_IMAGE must be an immutable ghcr.io/hisoka-io/nox digest}
+    container_name: nox-kps-bridge-init
+    profiles: ["kps-bridge", "kps-bridge-admin"]
+    user: "0:0"
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "DAC_READ_SEARCH"]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    entrypoint: ["chown", "-R", "10002:10002", "/var/lib/nox-kps", "/var/lib/nox-kps-bundles"]
+    volumes:
+      - nox-kps-bridge-identity:/var/lib/nox-kps
+      - nox-kps-bundles:/var/lib/nox-kps-bundles
+    restart: "no"
+
+  nox-kps-bridge:
+    image: ${NOX_IMAGE:?NOX_IMAGE must be an immutable ghcr.io/hisoka-io/nox digest}
+    container_name: nox-kps-bridge
+    profiles: ["kps-bridge"]
+    user: "10002:10002"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: host
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    entrypoint: ["nox-kps"]
+    command: ["run"]
+    environment:
+      - NOX_KPS_CONFIG=/etc/nox-kps/config.toml
+    volumes:
+      - type: bind
+        source: ./nox-kps-bridge.toml
+        target: /etc/nox-kps/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - nox-kps-bridge-identity:/var/lib/nox-kps
+      - nox-kps-bundles:/var/lib/nox-kps/keccak:ro
+    depends_on:
+      nox-kps-bridge-preflight:
+        condition: service_completed_successfully
+      nox-kps-bridge-init:
+        condition: service_completed_successfully
+      nox:
+        condition: service_started
+    restart: unless-stopped
+    stop_grace_period: 15s
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "nox-kps", "healthcheck"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+      start_period: 10s
+
+  # One-off commands for the bridge identity:
+  #   docker compose run --rm nox-kps-bridge-admin init
+  #   docker compose run --rm nox-kps-bridge-admin address
+  nox-kps-bridge-admin:
+    image: ${NOX_IMAGE:?NOX_IMAGE must be an immutable ghcr.io/hisoka-io/nox digest}
+    profiles: ["kps-bridge-admin"]
+    user: "10002:10002"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    entrypoint: ["nox-kps"]
+    command: ["check-config"]
+    environment:
+      - NOX_KPS_CONFIG=/etc/nox-kps/config.toml
+    volumes:
+      - type: bind
+        source: ./nox-kps-bridge.toml
+        target: /etc/nox-kps/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - nox-kps-bridge-identity:/var/lib/nox-kps
+      - nox-kps-bundles:/var/lib/nox-kps/keccak:ro
+    depends_on:
+      nox-kps-bridge-init:
+        condition: service_completed_successfully
+    restart: "no"
+
 volumes:
   nox-identity:
   nox-data:
   nox-logs:
   nox-kps-identity:
   nox-kps-bundles:
+  nox-kps-bridge-identity:

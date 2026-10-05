@@ -19,7 +19,9 @@ key_file = "/var/lib/nox-kps/kps.key"
 # this identity, which keeps your published address bound to your key.
 expected_certhash = ""
 
-# Optional: your registered node address (0x...), shown in /metadata.json.
+# Set this: your registered node address (`grep 'Address (for registration)' .env`).
+# /metadata.json shows it, and wallets that dial this address as a gateway or a
+# learned anchor map it to your node through it.
 node_address = ""
 
 # The node's loopback ingress (ingress_port) and topology API (topology_api_port),

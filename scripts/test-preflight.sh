@@ -10,8 +10,8 @@ export NOX__P2P_PRIVATE_KEY="$(printf '22%.0s' {1..32})"
 export NOX__ETH_WALLET_PRIVATE_KEY="$(printf '33%.0s' {1..32})"
 
 [[ "$(grep -c 'user: "10001:10001"' "$repo_dir/docker-compose.yml")" -eq 2 ]]
-[[ "$(grep -c 'cap_drop: \["ALL"\]' "$repo_dir/docker-compose.yml")" -eq 7 ]]
-[[ "$(grep -c 'no-new-privileges:true' "$repo_dir/docker-compose.yml")" -eq 7 ]]
+[[ "$(grep -c 'cap_drop: \["ALL"\]' "$repo_dir/docker-compose.yml")" -eq 11 ]]
+[[ "$(grep -c 'no-new-privileges:true' "$repo_dir/docker-compose.yml")" -eq 11 ]]
 
 python3 - "$repo_dir/docker-compose.yml" <<'PY'
 from pathlib import Path
@@ -126,6 +126,40 @@ if "nox-kps-bundles:/var/lib/nox-kps/keccak\n" not in admin or "nox-kps-init:\n 
 for name in ("nox-kps", "nox-kps-admin"):
     if "NOX_KPS_CONFIG=/etc/nox-kps/config.toml" not in service(name):
         raise SystemExit(f"{name} must read the mounted nox-kps.toml")
+
+# Optional bridge: the same hardening, its own profiles, config file and
+# identity volume, and its own preflight in --bridge mode.
+bridge_profiles = {
+    "nox-kps-bridge-preflight": 'profiles: ["kps-bridge"]',
+    "nox-kps-bridge-init": 'profiles: ["kps-bridge", "kps-bridge-admin"]',
+    "nox-kps-bridge": 'profiles: ["kps-bridge"]',
+    "nox-kps-bridge-admin": 'profiles: ["kps-bridge-admin"]',
+}
+for name, profile in bridge_profiles.items():
+    body = service(name)
+    if profile not in body:
+        raise SystemExit(f"{name} must run only under {profile}")
+    if 'cap_drop: ["ALL"]' not in body or "no-new-privileges:true" not in body or "read_only: true" not in body:
+        raise SystemExit(f"{name} is not hardened (cap_drop ALL, no-new-privileges, read-only root)")
+    if "nox-kps.toml" in body.replace("nox-kps-bridge.toml", ""):
+        raise SystemExit(f"{name} must read nox-kps-bridge.toml, never the published entry's nox-kps.toml")
+    if name != "nox-kps-bridge-preflight":
+        if "image: ${NOX_IMAGE:?" not in body:
+            raise SystemExit(f"{name} must run from the pinned node image NOX_IMAGE")
+        if "nox-kps-bridge-identity:/var/lib/nox-kps\n" not in body or "nox-kps-identity:" in body:
+            raise SystemExit(f"{name} must use the bridge identity volume only")
+bridge = service("nox-kps-bridge")
+for dependency in ("nox-kps-bridge-preflight", "nox-kps-bridge-init"):
+    if f"{dependency}:\n        condition: service_completed_successfully" not in bridge:
+        raise SystemExit(f"nox-kps-bridge can start without {dependency}")
+if 'user: "10002:10002"' not in bridge or 'command: ["run"]' not in bridge or "mem_limit: 512m" not in bridge:
+    raise SystemExit("nox-kps-bridge must run `nox-kps run` as UID 10002 with a memory limit")
+if "nox-kps-bundles:/var/lib/nox-kps/keccak:ro" not in bridge:
+    raise SystemExit("nox-kps-bridge must mount the bundles read-only")
+if "- --bridge" not in service("nox-kps-bridge-preflight"):
+    raise SystemExit("nox-kps-bridge-preflight must run preflight_kps.py --bridge")
+if "env_file" in service("nox-kps-bridge-preflight") or "env_file" in service("nox-kps-bridge-admin"):
+    raise SystemExit("the bridge services need no secrets and must not load .env")
 PY
 
 # nox-kps preflight (scripts/preflight_kps.py): one valid config passes, each
@@ -181,14 +215,14 @@ good_node = (
 
 
 def run(
-    kps: str, node: str, kps_image: str = image, release: str = deployment
+    kps: str, node: str, kps_image: str = image, release: str = deployment, extra: tuple[str, ...] = ()
 ) -> subprocess.CompletedProcess[str]:
     (work / "nox-kps.toml").write_text(kps, encoding="utf-8")
     (work / "config.toml").write_text(node, encoding="utf-8")
     (work / "deployment.json").write_text(release, encoding="utf-8")
     return subprocess.run(
         [sys.executable, str(script), str(work / "nox-kps.toml"), str(work / "config.toml"),
-         str(work / "deployment.json"), kps_image],
+         str(work / "deployment.json"), kps_image, *extra],
         capture_output=True, text=True, check=False,
     )
 
@@ -202,6 +236,9 @@ if ipv6_ok.returncode != 0:
 with_address = run(good_kps.replace('node_address = ""', 'node_address = "0x862D6B1105bdE9d64dC5182fe3CD9d09F6F37463"'), good_node)
 if with_address.returncode != 0:
     raise SystemExit(f"a registered node_address was rejected: {with_address.stderr}")
+# An empty node_address still passes (running entries keep starting) but says what it costs.
+if "node_address is empty" not in ok.stderr or "node_address is empty" in with_address.stderr:
+    raise SystemExit(f"the empty node_address note is missing or misplaced: {ok.stderr!r} / {with_address.stderr!r}")
 valid = 3
 
 sectioned = """[kps]
@@ -281,9 +318,52 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as busy:
     result = run(good_kps.replace(listen_line, f'listen = "0.0.0.0:{busy_port}"'), good_node)
     if result.returncode == 0 or "already in use" not in result.stderr:
         raise SystemExit(f"nox-kps preflight accepted a UDP port held by another process: {result.stderr}")
+
+# Bridge mode (--bridge, configs/nox-kps-bridge.toml): the template passes once the
+# README edits are made; the bridge keeps its own ports and names its registered node.
+bridge_template = (repo / "configs" / "nox-kps-bridge.toml").read_text(encoding="utf-8")
+node_line = 'node_address = "0x862D6B1105bdE9d64dC5182fe3CD9d09F6F37463"'
+bridge_port = free_udp_port()
+bridge_listen = f'listen = "0.0.0.0:{bridge_port}"'
+good_bridge = (
+    bridge_template.replace('advertise = ["203.0.113.20"]', 'advertise = ["3.239.73.250"]')
+    .replace('listen = "0.0.0.0:15007"', bridge_listen)
+    .replace('expected_certhash = ""', certhash_line)
+    .replace('node_address = ""', node_line)
+)
+if good_bridge.count(node_line) != 1:
+    raise SystemExit("configs/nox-kps-bridge.toml no longer has the node_address line the README edits")
+if good_bridge.count(bridge_listen) != 1 or good_bridge.count(certhash_line) != 1 or "127.0.0.1:15008" not in good_bridge:
+    raise SystemExit("configs/nox-kps-bridge.toml no longer has the lines the README edits")
+bridge_ok = run(good_bridge, good_node, extra=("--bridge",))
+if bridge_ok.returncode != 0 or "nox-kps 0.1.0 bridge preflight passed" not in bridge_ok.stdout:
+    raise SystemExit(f"valid bridge config rejected: {bridge_ok.stderr}")
+bound = run(good_bridge.replace(bridge_listen, f'listen = "10.0.1.23:{bridge_port}"'), good_node, extra=("--bridge",))
+if bound.returncode != 0:
+    raise SystemExit(f"a bridge bound to its own host address was rejected: {bound.stderr}")
+valid += 2
+bridge_cases = {
+    "the bridge template before init": (good_bridge.replace(certhash_line, 'expected_certhash = ""'), "nox-kps-bridge-admin init"),
+    "the published entry's UDP port": (good_bridge.replace(bridge_listen, 'listen = "0.0.0.0:15005"'), "own, such as 15007"),
+    "the published entry's admin port": (
+        good_bridge.replace('admin_listen = "127.0.0.1:15008"', 'admin_listen = "127.0.0.1:15006"'), "127.0.0.1:15008"),
+    "a bridge without node_address": (good_bridge.replace(node_line, 'node_address = ""'), "bridge node_address is empty"),
+    "a bridge with a malformed node_address": (good_bridge.replace(node_line, 'node_address = "0x1234"'), "node_address must be"),
+    "a loopback bridge listener": (good_bridge.replace(bridge_listen, f'listen = "127.0.0.1:{bridge_port}"'), "bridge listen"),
+    "the bridge template's documentation IP": (
+        bridge_template.replace('listen = "0.0.0.0:15007"', bridge_listen).replace('expected_certhash = ""', certhash_line)
+        .replace('node_address = ""', node_line),
+        "not a public IP"),
+}
+for label, (kps, needle) in bridge_cases.items():
+    result = run(kps, good_node, extra=("--bridge",))
+    if result.returncode == 0 or needle not in result.stderr:
+        raise SystemExit(f"bridge preflight accepted {label}: rc={result.returncode} {result.stderr}")
+if run(good_bridge, good_node, extra=("--bridge", "x")).returncode == 0:
+    raise SystemExit("nox-kps preflight accepted an unknown extra argument")
 print(
     f"nox-kps preflight: {valid} valid configs passed, "
-    f"{len(cases) + len(release_cases) + 1} invalid configs rejected"
+    f"{len(cases) + len(release_cases) + len(bridge_cases) + 2} invalid configs rejected"
 )
 PY
 
