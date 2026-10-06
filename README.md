@@ -31,7 +31,7 @@ mixnet.
 | `HowlPaymentAdapter` | `0xfC874B702F8D59B60B35582855505F4f60cE766D` |
 | SOKA (staking and fee asset, 18 decimals) | `0x0F69cf1c9F4FF72471701036dd789c934458e630` |
 | `chain_start_block` | `312414608` |
-| Nox image | `ghcr.io/hisoka-io/nox@sha256:709155c5fa11f1fb37f82ca1c5b31952730fe0ce3c00192a8a398802bfdc887e` (`0.4.0-rc.3`) |
+| Nox image | `ghcr.io/hisoka-io/nox@sha256:65867f613db88989b51e9dd3027c61cf4c64d9557747069d1d453b066e30f3a8` (`0.4.0-rc.6`) |
 | Preflight image | `python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9` |
 
 The role templates in `configs/` already carry these values. The manifest is the source of truth: preflight
@@ -138,7 +138,7 @@ record that carries it names the `nox-kps` version in `release.noxKps`; check yo
 python3 -c 'import json; print(json.load(open("deployment.json"))["release"].get("noxKps"))'
 ```
 
-A version (`nox-kps` is versioned with the node release, for example `0.4.0-rc.5`) means the pinned image
+A version (`nox-kps` is versioned with the node release, for example `0.4.0-rc.6`) means the pinned image
 serves KPS. `nox-kps-preflight` checks this, together with `nox-kps.toml` and `config.toml`, every time the
 sidecar starts.
 
