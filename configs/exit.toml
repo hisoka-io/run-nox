@@ -125,8 +125,9 @@ max_response_bytes = 134217728  # 128 MB max response body
 # TLS server name) and allow_private_ips. An exit with enabled = true lists
 # tunnel_v1 in the capabilities of /metrics/json, and clients send tunnels only
 # to those exits. The anon-rpc worker 0.4.0 uses end-to-end TLS by default, so
-# this block is what brings wallet traffic to your exit. The Hisoka fleet exits
-# run the same values.
+# an exit needs this block to be eligible for wallet traffic. The Hisoka fleet
+# exits run tunnels and advertise tunnel_v1; these are the values they were
+# rolled out with.
 # Each open tunnel holds one TCP socket, so keep max_sessions well inside the
 # container's open-files limit, with headroom for P2P and HTTP connections:
 # 512 suits Docker's usual soft limit of 1024. For the node default of 4096,

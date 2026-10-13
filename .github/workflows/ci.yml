@@ -104,7 +104,7 @@ jobs:
           block="$(sed -n '/^\[tunnel\]$/,/^$/p' configs/exit.toml)"
           test "$(grep -c -x -e '\[tunnel\]' -e 'enabled = true' -e 'allowed_ports = \[443\]' \
             -e 'max_sessions = 512' <<<"$block")" -eq 4
-          ! grep -q '^\[tunnel\]$' configs/relay.toml
+          test "$(grep -c '^\[tunnel\]$' configs/relay.toml)" -eq 0
           sed '/^\[tunnel\]$/,/^$/ s/^enabled = true$/enabled = false/' configs/exit.toml > exit-no-tunnel.toml
           test "$(grep -c -x 'enabled = false' exit-no-tunnel.toml)" -eq 1
           for config in configs/exit.toml exit-no-tunnel.toml; do

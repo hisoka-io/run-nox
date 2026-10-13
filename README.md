@@ -104,9 +104,8 @@ The exit sees the destination host name, timing and sizes. Every other request t
 on or off.
 
 The anon-rpc worker `0.4.0` (`@hisoka-io/anon-rpc-worker`) uses end-to-end TLS by default and routes to exits
-that list `tunnel_v1`, so the `[tunnel]` block is what brings wallet traffic to your exit. The Hisoka fleet exits
-run `[tunnel] enabled = true` with `max_sessions = 512` and advertise `tunnel_v1`; `configs/exit.toml` ships the
-same block:
+that list `tunnel_v1`, so an exit needs the `[tunnel]` block to be eligible for wallet traffic. The Hisoka fleet
+exits run tunnels and advertise `tunnel_v1`; `configs/exit.toml` ships the values they were rolled out with:
 
 ```toml
 [tunnel]
