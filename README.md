@@ -31,7 +31,7 @@ mixnet.
 | `HowlPaymentAdapter` | `0xfC874B702F8D59B60B35582855505F4f60cE766D` |
 | SOKA (staking and fee asset, 18 decimals) | `0x0F69cf1c9F4FF72471701036dd789c934458e630` |
 | `chain_start_block` | `312414608` |
-| Nox image | `ghcr.io/hisoka-io/nox@sha256:e19bcbb04dc69fc624d48e8827d99d125647fcfc671c2d3832e2b74a896f1f55` (`0.4.0-rc.9`) |
+| Nox image | `ghcr.io/hisoka-io/nox@sha256:31d6571eb36cfe1d96401330e2cbc4e1aad27903dbc780988ac21ed939aa4087` (`0.4.0-rc.10`) |
 | Preflight image | `python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9` |
 
 The role templates in `configs/` already carry these values. The manifest is the source of truth: preflight
@@ -96,15 +96,16 @@ Never expose the price server publicly: Compose binds it to `127.0.0.1`. Relays 
 after the price server container without waiting for a fresh price, so a price-API outage does not keep an exit
 off the mixnet; the exit refuses paid requests until it can read fresh prices. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
 
-### End-to-End TLS Tunnels (optional)
+### End-to-End TLS Tunnels
 
 From `0.4.0-rc.9` an exit can relay end-to-end TLS tunnels: the client runs TLS itself and the exit relays TLS
 records to one upstream host, so requests and responses stay encrypted between the client and its RPC provider.
-The exit sees the destination host name, timing and sizes. Tunnels are off by default, and every other request
-type works the same with them on or off.
+The exit sees the destination host name, timing and sizes. Every other request type works the same with tunnels
+on or off.
 
-To turn them on, uncomment the `[tunnel]` block in your `config.toml` (it comes from `configs/exit.toml`) and
-restart the node:
+The anon-rpc worker `0.4.0` (`@hisoka-io/anon-rpc-worker`) uses end-to-end TLS by default and routes to exits
+that list `tunnel_v1`, so an exit needs the `[tunnel]` block to be eligible for wallet traffic. The Hisoka fleet
+exits run tunnels and advertise `tunnel_v1`; `configs/exit.toml` ships the values they were rolled out with:
 
 ```toml
 [tunnel]
@@ -112,6 +113,9 @@ enabled = true
 allowed_ports = [443]
 max_sessions = 512
 ```
+
+A `config.toml` copied from an earlier template has the block commented out: uncomment it (or add the four
+lines above) and restart the node. To serve the other request types only, set `enabled = false`.
 
 Each open tunnel holds one TCP socket, so `max_sessions` stays well inside the container's open-files limit,
 with headroom for P2P and HTTP connections. `max_sessions = 512` suits Docker's usual soft limit of 1024. For a
@@ -170,7 +174,7 @@ record that carries it names the `nox-kps` version in `release.noxKps`; check yo
 python3 -c 'import json; print(json.load(open("deployment.json"))["release"].get("noxKps"))'
 ```
 
-A version (`nox-kps` is versioned with the node release, for example `0.4.0-rc.9`) means the pinned image
+A version (`nox-kps` is versioned with the node release, for example `0.4.0-rc.10`) means the pinned image
 serves KPS. `nox-kps-preflight` checks this, together with `nox-kps.toml` and `config.toml`, every time the
 sidecar starts.
 
@@ -311,6 +315,21 @@ docker compose run --rm nox-kps-admin bundle list
 ```
 
 The running sidecar picks up new bundles within a minute.
+
+The current bundle is `@hisoka-io/anon-rpc-worker` `0.4.0` (1.82 MB, keccak-256
+`0xd8bef626ec8511d7a468bca5137880680ca2da20d2ea4d9c981a2a3d0c86ba1e`). Wallets find it through the stable
+specifier on Ethereum Sepolia (`11155111`), `0x35133267A8F7EC35046a83DCA0f4Ca8A6e1b7A9A`, which follows each
+worker release. Each release also has a fixed per-release specifier for wallets that pin one version:
+
+| Worker | Per-release specifier (Ethereum Sepolia) |
+|---|---|
+| `0.4.0` | `0xDf5Db854BA75B52a4bF1a250a93D8d25cB982b2d` |
+| `0.3.0` | `0x29B51ca9Ad80E9c0B0D111C8748E6a7908b82eDB` |
+| `0.2.0` | `0x29b4a6A8Cc11769531854d87f9F33EC63Efe8fe6` |
+
+The specifier reference is
+[specifier/README.md](https://github.com/hisoka-io/nox-sdk/blob/main/packages/anon-rpc-worker/specifier/README.md)
+in `hisoka-io/nox-sdk`.
 
 ### Stop Serving KPS
 
@@ -733,11 +752,13 @@ all three writable mounts report numeric owner `10001:10001` from the target ima
 `nox-kps` runs from the same `NOX_IMAGE` as the node, so `docker compose up -d` after a pin upgrades both. Keep
 the `nox-kps-identity` volume across upgrades and rollbacks: it holds the key behind your published KPS address.
 
-Moving from `0.4.0-rc.6` to `0.4.0-rc.9`: upgrade one node at a time. rc.6 to rc.9 nodes, `nox-kps` relays and
-all published clients interoperate, and the Sphinx wire, fragment, FEC and SURB formats are the same. An entry's
-node and `nox-kps` upgrade together, which keeps the `claim-v2` capability the entry advertises matched with the
-node behind it. Existing `config.toml` files work as they are; the new settings (`[tunnel]`, `[http]` upstream
-keep-alive, `[ingress]` claim waits) have defaults. Release notes:
+Moving from `0.4.0-rc.6` or `0.4.0-rc.9` to `0.4.0-rc.10`: upgrade one node at a time. rc.6 to rc.10 nodes,
+`nox-kps` relays and all published clients interoperate, and the Sphinx wire, fragment, FEC and SURB formats are
+the same. rc.10 keeps the rc.9 wire formats and configuration and builds `nox-kps` with `quinn-proto` 0.11.19. An
+entry's node and `nox-kps` upgrade together, which keeps the `claim-v2` capability the entry advertises matched
+with the node behind it. Existing `config.toml` files work as they are; the settings introduced in rc.9
+(`[tunnel]`, `[http]` upstream keep-alive, `[ingress]` claim waits) have defaults, and an exit serves tunnels
+once its `config.toml` carries the `[tunnel]` block from `configs/exit.toml`. Release notes:
 [hisoka-io/nox releases](https://github.com/hisoka-io/nox/releases).
 
 Promote relays first, then one exit, then the remaining exits. Keep the previous digest and snapshots until the observation window completes.
