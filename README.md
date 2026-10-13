@@ -31,7 +31,7 @@ mixnet.
 | `HowlPaymentAdapter` | `0xfC874B702F8D59B60B35582855505F4f60cE766D` |
 | SOKA (staking and fee asset, 18 decimals) | `0x0F69cf1c9F4FF72471701036dd789c934458e630` |
 | `chain_start_block` | `312414608` |
-| Nox image | `ghcr.io/hisoka-io/nox@sha256:65867f613db88989b51e9dd3027c61cf4c64d9557747069d1d453b066e30f3a8` (`0.4.0-rc.6`) |
+| Nox image | `ghcr.io/hisoka-io/nox@sha256:e19bcbb04dc69fc624d48e8827d99d125647fcfc671c2d3832e2b74a896f1f55` (`0.4.0-rc.9`) |
 | Preflight image | `python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9` |
 
 The role templates in `configs/` already carry these values. The manifest is the source of truth: preflight
@@ -96,6 +96,38 @@ Never expose the price server publicly: Compose binds it to `127.0.0.1`. Relays 
 after the price server container without waiting for a fresh price, so a price-API outage does not keep an exit
 off the mixnet; the exit refuses paid requests until it can read fresh prices. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
 
+### End-to-End TLS Tunnels (optional)
+
+From `0.4.0-rc.9` an exit can relay end-to-end TLS tunnels: the client runs TLS itself and the exit relays TLS
+records to one upstream host, so requests and responses stay encrypted between the client and its RPC provider.
+The exit sees the destination host name, timing and sizes. Tunnels are off by default, and every other request
+type works the same with them on or off.
+
+To turn them on, uncomment the `[tunnel]` block in your `config.toml` (it comes from `configs/exit.toml`) and
+restart the node:
+
+```toml
+[tunnel]
+enabled = true
+allowed_ports = [443]
+max_sessions = 512
+```
+
+Each open tunnel holds one TCP socket, so `max_sessions` stays well inside the container's open-files limit,
+with headroom for P2P and HTTP connections. `max_sessions = 512` suits Docker's usual soft limit of 1024. For a
+higher value (the node default is 4096), uncomment the `ulimits: nofile` block on the `nox` service in
+`docker-compose.yml` first. Check the limit the node runs with and confirm the exit advertises tunnels:
+
+```bash
+docker compose exec nox sh -c 'ulimit -n'
+curl --fail --silent http://127.0.0.1:15001/metrics/json | grep -o '"tunnel_v1"'
+```
+
+Destinations follow `[http] allowed_domains`, matched against the TLS server name, and the same SSRF rules as the
+HTTP proxy. Watch `nox_tunnel_sessions_active`, `nox_tunnel_opens_total{result}` and
+`nox_tunnel_closes_total{reason}` on `/metrics`. The full reference is
+[docs/tunnel.md](https://github.com/hisoka-io/nox/blob/main/docs/tunnel.md) in `hisoka-io/nox`.
+
 ### Claiming Exit Credit
 
 Exit credit accrues in `NoxRewardPool` to the exit wallet, and only that wallet can claim it with
@@ -138,7 +170,7 @@ record that carries it names the `nox-kps` version in `release.noxKps`; check yo
 python3 -c 'import json; print(json.load(open("deployment.json"))["release"].get("noxKps"))'
 ```
 
-A version (`nox-kps` is versioned with the node release, for example `0.4.0-rc.6`) means the pinned image
+A version (`nox-kps` is versioned with the node release, for example `0.4.0-rc.9`) means the pinned image
 serves KPS. `nox-kps-preflight` checks this, together with `nox-kps.toml` and `config.toml`, every time the
 sidecar starts.
 
@@ -608,6 +640,12 @@ Exit token entries are an allowlist. Each configured address must appear in the 
 match on-chain decimals, and have explicit symbol and oracle identifiers in operator config. An unconfigured token
 is rejected rather than priced with a fallback.
 
+`[relayer] mix_delay_ms` is the average Poisson delay each hop adds: a higher value gives more mixing and more
+latency. The node default is 500, the templates set 200, and the Hisoka testnet fleet runs 40. From `0.4.0-rc.9`
+a node serves up to 256 inbound packet streams per connection (`[network] max_concurrent_streams`) and keeps up
+to 48 packet requests open to each peer (`max_packets_in_flight_per_peer`), so large replies arrive whole at the
+next hop. The templates use these defaults.
+
 The checked-in 20,000,000 transaction-gas ceiling (`quote_maximum_transaction_gas`) leaves headroom over a
 Howl-paid execution, which needs a gas limit of about 10.8M on Arbitrum because payment and action gas are
 reserved up front. Operators must remeasure every enabled payment adapter and action class, then price the full signed reservation. `quote_max_pending_sponsored_gas` remains the aggregate exposure limit,
@@ -694,6 +732,13 @@ all three writable mounts report numeric owner `10001:10001` from the target ima
 
 `nox-kps` runs from the same `NOX_IMAGE` as the node, so `docker compose up -d` after a pin upgrades both. Keep
 the `nox-kps-identity` volume across upgrades and rollbacks: it holds the key behind your published KPS address.
+
+Moving from `0.4.0-rc.6` to `0.4.0-rc.9`: upgrade one node at a time. rc.6 to rc.9 nodes, `nox-kps` relays and
+all published clients interoperate, and the Sphinx wire, fragment, FEC and SURB formats are the same. An entry's
+node and `nox-kps` upgrade together, which keeps the `claim-v2` capability the entry advertises matched with the
+node behind it. Existing `config.toml` files work as they are; the new settings (`[tunnel]`, `[http]` upstream
+keep-alive, `[ingress]` claim waits) have defaults. Release notes:
+[hisoka-io/nox releases](https://github.com/hisoka-io/nox/releases).
 
 Promote relays first, then one exit, then the remaining exits. Keep the previous digest and snapshots until the observation window completes.
 
