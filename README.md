@@ -96,15 +96,17 @@ Never expose the price server publicly: Compose binds it to `127.0.0.1`. Relays 
 after the price server container without waiting for a fresh price, so a price-API outage does not keep an exit
 off the mixnet; the exit refuses paid requests until it can read fresh prices. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
 
-### End-to-End TLS Tunnels (optional)
+### End-to-End TLS Tunnels
 
 From `0.4.0-rc.9` an exit can relay end-to-end TLS tunnels: the client runs TLS itself and the exit relays TLS
 records to one upstream host, so requests and responses stay encrypted between the client and its RPC provider.
-The exit sees the destination host name, timing and sizes. Tunnels are off by default, and every other request
-type works the same with them on or off.
+The exit sees the destination host name, timing and sizes. Every other request type works the same with tunnels
+on or off.
 
-To turn them on, uncomment the `[tunnel]` block in your `config.toml` (it comes from `configs/exit.toml`) and
-restart the node:
+The anon-rpc worker `0.4.0` (`@hisoka-io/anon-rpc-worker`) uses end-to-end TLS by default and routes to exits
+that list `tunnel_v1`, so the `[tunnel]` block is what brings wallet traffic to your exit. The Hisoka fleet exits
+run `[tunnel] enabled = true` with `max_sessions = 512` and advertise `tunnel_v1`; `configs/exit.toml` ships the
+same block:
 
 ```toml
 [tunnel]
@@ -112,6 +114,9 @@ enabled = true
 allowed_ports = [443]
 max_sessions = 512
 ```
+
+A `config.toml` copied from an earlier template has the block commented out: uncomment it (or add the four
+lines above) and restart the node. To serve the other request types only, set `enabled = false`.
 
 Each open tunnel holds one TCP socket, so `max_sessions` stays well inside the container's open-files limit,
 with headroom for P2P and HTTP connections. `max_sessions = 512` suits Docker's usual soft limit of 1024. For a
