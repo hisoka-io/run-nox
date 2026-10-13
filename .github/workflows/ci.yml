@@ -99,6 +99,15 @@ jobs:
             grep -q '^configuration OK$' <<<"$output"
             grep -i "^node_role: $role$" <<<"$output"
           done
+      - name: The exit template passes check-config with the [tunnel] block turned on
+        run: |
+          sed -E 's/^# (\[tunnel\]|enabled = true|allowed_ports = \[443\]|max_sessions = 512)$/\1/' \
+            configs/exit.toml > exit-tunnel.toml
+          test "$(grep -c -x -e '\[tunnel\]' -e 'enabled = true' -e 'max_sessions = 512' exit-tunnel.toml)" -eq 3
+          output="$(docker run --rm --env-file .env \
+            -v "$PWD/exit-tunnel.toml:/etc/nox/config.toml:ro" \
+            "$NOX_IMAGE" nox --config /etc/nox/config.toml check-config)"
+          grep -q '^configuration OK$' <<<"$output"
       - name: The pinned image ships the recorded nox-kps and accepts the template
         run: |
           NOX_KPS="$(jq -r '.release.noxKps // empty' configs/arbitrum-sepolia.deployment.json)"
