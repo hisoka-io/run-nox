@@ -317,6 +317,21 @@ docker compose run --rm nox-kps-admin bundle list
 
 The running sidecar picks up new bundles within a minute.
 
+The current bundle is `@hisoka-io/anon-rpc-worker` `0.4.0` (1.82 MB, keccak-256
+`0xd8bef626ec8511d7a468bca5137880680ca2da20d2ea4d9c981a2a3d0c86ba1e`). Wallets find it through the stable
+specifier on Ethereum Sepolia (`11155111`), `0x35133267A8F7EC35046a83DCA0f4Ca8A6e1b7A9A`, which follows each
+worker release. Each release also has a fixed per-release specifier for wallets that pin one version:
+
+| Worker | Per-release specifier (Ethereum Sepolia) |
+|---|---|
+| `0.4.0` | `0xDf5Db854BA75B52a4bF1a250a93D8d25cB982b2d` |
+| `0.3.0` | `0x29B51ca9Ad80E9c0B0D111C8748E6a7908b82eDB` |
+| `0.2.0` | `0x29b4a6A8Cc11769531854d87f9F33EC63Efe8fe6` |
+
+The specifier reference is
+[specifier/README.md](https://github.com/hisoka-io/nox-sdk/blob/main/packages/anon-rpc-worker/specifier/README.md)
+in `hisoka-io/nox-sdk`.
+
 ### Stop Serving KPS
 
 Clear the published address first (exits stop the node around the transaction, as in step 6), then stop the
