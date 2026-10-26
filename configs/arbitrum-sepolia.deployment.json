@@ -5,9 +5,9 @@
     "startBlock": 312414608
   },
   "release": {
-    "noxImage": "ghcr.io/hisoka-io/nox@sha256:31d6571eb36cfe1d96401330e2cbc4e1aad27903dbc780988ac21ed939aa4087",
+    "noxImage": "ghcr.io/hisoka-io/nox@sha256:3ad6c66d9a67c1028f06f38a67646c45e8762048b3ebbe0313a270a7bc453e6c",
     "preflightImage": "python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9",
-    "noxKps": "0.4.0-rc.10"
+    "noxKps": "0.4.0-rc.11"
   },
   "contracts": {
     "noxRegistry": "0xF7BFf88A1412054a001Dc4b8aCBddAd6F9b26cB6",

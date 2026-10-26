@@ -161,8 +161,8 @@ rate_trusted = 2000
 queue_size = 10000
 worker_count = 2
 # Average per-hop Poisson delay (ms). Higher = more privacy, more latency.
-# The node default is 500; the Hisoka testnet fleet runs 40.
-mix_delay_ms = 200.0
+# The node default is 500; the templates match the Hisoka testnet fleet (40).
+mix_delay_ms = 40.0
 cover_traffic_rate = 0.02
 drop_traffic_rate = 0.02
 replay_window = 3600
