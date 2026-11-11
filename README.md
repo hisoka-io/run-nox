@@ -31,7 +31,7 @@ mixnet.
 | `HowlPaymentAdapter` | `0xfC874B702F8D59B60B35582855505F4f60cE766D` |
 | SOKA (staking and fee asset, 18 decimals) | `0x0F69cf1c9F4FF72471701036dd789c934458e630` |
 | `chain_start_block` | `312414608` |
-| Nox image | `ghcr.io/hisoka-io/nox@sha256:a02842c29f5d0843a4309a318a2e177553abe93c0c0ae31bb1194dd6d20e3d14` (`0.4.0-rc.12`) |
+| Nox image | `ghcr.io/hisoka-io/nox@sha256:548fd7bfd3de78bc0683452b263c395126e237c5d9c248f600e0cdc36e7f5d88` (`0.4.0-rc.13`) |
 | Preflight image | `python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9` |
 
 The role templates in `configs/` already carry these values. The manifest is the source of truth: preflight
@@ -184,7 +184,7 @@ record that carries it names the `nox-kps` version in `release.noxKps`; check yo
 python3 -c 'import json; print(json.load(open("deployment.json"))["release"].get("noxKps"))'
 ```
 
-A version (`nox-kps` is versioned with the node release, for example `0.4.0-rc.12`) means the pinned image
+A version (`nox-kps` is versioned with the node release, for example `0.4.0-rc.13`) means the pinned image
 serves KPS. `nox-kps-preflight` checks this, together with `nox-kps.toml` and `config.toml`, every time the
 sidecar starts.
 
@@ -765,6 +765,14 @@ all three writable mounts report numeric owner `10001:10001` from the target ima
 
 `nox-kps` runs from the same `NOX_IMAGE` as the node, so `docker compose up -d` after a pin upgrades both. Keep
 the `nox-kps-identity` volume across upgrades and rollbacks: it holds the key behind your published KPS address.
+
+Moving from `0.4.0-rc.12` to `0.4.0-rc.13`: upgrade one node at a time; rc.6 to rc.13 nodes interoperate and the
+wire formats are the same. The first start moves the node database from sled to redb (`db/nox.redb`) in one
+import, verifies every record and keeps the sled files in `db/sled-backup-<unix>/`; later starts read redb. Keep a
+copy of the data volume from before the upgrade until the node has run cleanly. The storage key
+`compact_on_start_blob_bytes` is now `compact_on_start_fragmented_bytes` (validation names the new key), and the
+new optional keys `network.rate_limit.inactive_peer_ttl_secs` and `ingress.ws_max_subscriptions` have defaults,
+so existing `config.toml` files work as they are.
 
 Moving from `0.4.0-rc.11` to `0.4.0-rc.12`: upgrade one node at a time. rc.12 is a security release with the
 rc.11 configuration keys, stored records and wire formats; it moves libp2p's stream multiplexer to yamux 0.13.10,
