@@ -117,10 +117,12 @@ max_sessions = 512
 A `config.toml` copied from an earlier template has the block commented out: uncomment it (or add the four
 lines above) and restart the node. To serve the other request types only, set `enabled = false`.
 
-Each open tunnel holds one TCP socket, so `max_sessions` stays well inside the container's open-files limit,
-with headroom for P2P and HTTP connections. `max_sessions = 512` suits Docker's usual soft limit of 1024. For a
-higher value (the node default is 4096), uncomment the `ulimits: nofile` block on the `nox` service in
-`docker-compose.yml` first. Check the limit the node runs with and confirm the exit advertises tunnels:
+Each open tunnel holds one TCP socket. From `0.4.0-rc.11` the node raises its soft open-file limit to the hard
+limit at start, then checks that `max_sessions` plus 256 descriptors for the rest of the node fits. When it does
+not, the node refuses to start and its log names the limit to set. `max_sessions = 512` fits a limit of 1024. For
+a higher value (the node default is 4096), uncomment the `ulimits: nofile` block on the `nox` service in
+`docker-compose.yml` and set it to at least the value from that message. Check the limit the node runs with and
+confirm the exit advertises tunnels:
 
 ```bash
 docker compose exec nox sh -c 'ulimit -n'
@@ -761,7 +763,7 @@ Moving from `0.4.0-rc.6`, `0.4.0-rc.9` or `0.4.0-rc.10` to `0.4.0-rc.11`: upgrad
 rc.11 nodes, `nox-kps` relays and all published clients interoperate, and the Sphinx wire, fragment, FEC and SURB
 formats are the same. rc.11 keeps the rc.10 configuration keys and stored records; it runs chain access on Alloy,
 drains in-flight work on graceful shutdown and raises the open-file soft limit at startup. `benchmark_mode = true`
-loads only in `dev-node` builds, so keep it `false` (the template value) on production nodes. An entry's node and
+loads only in `dev-node` builds, so keep it `false` (the template value) on every operator node. An entry's node and
 `nox-kps` upgrade together, which keeps the `claim-v2` capability the entry advertises matched with the node behind
 it. Existing `config.toml` files work as they are; the settings introduced in rc.9 (`[tunnel]`, `[http]` upstream
 keep-alive, `[ingress]` claim waits) have defaults, and an exit serves tunnels once its `config.toml` carries the

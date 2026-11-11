@@ -113,7 +113,8 @@ response_prune_interval_secs = 60
 # --- [http] HTTP Proxy (Exit Node) ---
 
 [http]
-# SSRF protection -NEVER set allow_private_ips = true in production
+# Keep allow_private_ips = false on every public exit: the exit then refuses
+# private and special-use destination addresses (docs/exit-policy.md in hisoka-io/nox).
 allow_private_ips = false
 request_timeout_secs = 120
 max_response_bytes = 134217728  # 128 MB max response body
