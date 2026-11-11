@@ -96,6 +96,14 @@ Never expose the price server publicly: Compose binds it to `127.0.0.1`. Relays 
 after the price server container without waiting for a fresh price, so a price-API outage does not keep an exit
 off the mixnet; the exit refuses paid requests until it can read fresh prices. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
 
+### Exit Policy
+
+An exit relays HTTP and HTTPS requests to public hosts, JSON-RPC calls, signed transaction broadcasts, paid
+execution and end-to-end TLS tunnels on TCP 443, and refuses private and special-use destinations
+(`allow_private_ips = false`). What it relays, its limits and the abuse contact are in
+[docs/exit-policy.md](https://github.com/hisoka-io/nox/blob/main/docs/exit-policy.md) in `hisoka-io/nox`; outside
+exits run with that policy.
+
 ### End-to-End TLS Tunnels
 
 From `0.4.0-rc.9` an exit can relay end-to-end TLS tunnels: the client runs TLS itself and the exit relays TLS
@@ -117,10 +125,12 @@ max_sessions = 512
 A `config.toml` copied from an earlier template has the block commented out: uncomment it (or add the four
 lines above) and restart the node. To serve the other request types only, set `enabled = false`.
 
-Each open tunnel holds one TCP socket, so `max_sessions` stays well inside the container's open-files limit,
-with headroom for P2P and HTTP connections. `max_sessions = 512` suits Docker's usual soft limit of 1024. For a
-higher value (the node default is 4096), uncomment the `ulimits: nofile` block on the `nox` service in
-`docker-compose.yml` first. Check the limit the node runs with and confirm the exit advertises tunnels:
+Each open tunnel holds one TCP socket. From `0.4.0-rc.11` the node raises its soft open-file limit to the hard
+limit at start, then checks that `max_sessions` plus 256 descriptors for the rest of the node fits. When it does
+not, the node refuses to start and its log names the limit to set. `max_sessions = 512` fits a limit of 1024. For
+a higher value (the node default is 4096), uncomment the `ulimits: nofile` block on the `nox` service in
+`docker-compose.yml` and set it to at least the value from that message. Check the limit the node runs with and
+confirm the exit advertises tunnels:
 
 ```bash
 docker compose exec nox sh -c 'ulimit -n'
@@ -659,6 +669,10 @@ Exit token entries are an allowlist. Each configured address must appear in the 
 match on-chain decimals, and have explicit symbol and oracle identifiers in operator config. An unconfigured token
 is rejected rather than priced with a fallback.
 
+`[network] peer_admission` defaults to `enforce`: once the node has verified the node set against the registry
+and a 120 s start-up grace period has passed, it accepts P2P connections and packets only from registered nodes.
+The templates keep the default, as the Hisoka fleet does, so register before you expect peers to connect.
+
 `[relayer] mix_delay_ms` is the average Poisson delay each hop adds: a higher value gives more mixing and more
 latency. The node default is 500; the templates set 40, the value the Hisoka testnet fleet runs. From `0.4.0-rc.9`
 a node serves up to 256 inbound packet streams per connection (`[network] max_concurrent_streams`) and keeps up
@@ -761,7 +775,7 @@ Moving from `0.4.0-rc.6`, `0.4.0-rc.9` or `0.4.0-rc.10` to `0.4.0-rc.11`: upgrad
 rc.11 nodes, `nox-kps` relays and all published clients interoperate, and the Sphinx wire, fragment, FEC and SURB
 formats are the same. rc.11 keeps the rc.10 configuration keys and stored records; it runs chain access on Alloy,
 drains in-flight work on graceful shutdown and raises the open-file soft limit at startup. `benchmark_mode = true`
-loads only in `dev-node` builds, so keep it `false` (the template value) on production nodes. An entry's node and
+loads only in `dev-node` builds, so keep it `false` (the template value) on every operator node. An entry's node and
 `nox-kps` upgrade together, which keeps the `claim-v2` capability the entry advertises matched with the node behind
 it. Existing `config.toml` files work as they are; the settings introduced in rc.9 (`[tunnel]`, `[http]` upstream
 keep-alive, `[ingress]` claim waits) have defaults, and an exit serves tunnels once its `config.toml` carries the

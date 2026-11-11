@@ -115,10 +115,12 @@ services:
     environment:
       - RUST_LOG=info
       - NOX_LOG_DIR=/var/lib/nox/logs
-    # Exits with [tunnel] enabled: each open tunnel holds one socket. Docker's
-    # usual soft limit of 1024 open files suits max_sessions = 512. For a
-    # higher max_sessions, uncomment this and keep it above max_sessions with
-    # headroom for P2P and HTTP connections (README "End-to-End TLS Tunnels").
+    # Exits with [tunnel] enabled: each open tunnel holds one socket. From
+    # 0.4.0-rc.11 the node raises its soft open-file limit to the hard limit at
+    # start and refuses to start, naming the value to set, when max_sessions
+    # plus 256 does not fit. max_sessions = 512 fits a 1024 limit. If the node
+    # refuses to start with a higher max_sessions, uncomment this and set it
+    # to at least the value in that message (README "End-to-End TLS Tunnels").
     # ulimits:
     #   nofile:
     #     soft: 16384
