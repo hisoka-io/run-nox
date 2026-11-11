@@ -209,7 +209,13 @@ class Rpc:
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
             fail(f"RPC preflight failed for {method}: {type(error).__name__}")
         if not isinstance(payload, dict) or "result" not in payload:
-            fail(f"RPC preflight returned no result for {method}")
+            error = payload.get("error") if isinstance(payload, dict) else None
+            code = error.get("code") if isinstance(error, dict) else None
+            detail = f" (RPC error code {code})" if isinstance(code, int) else ""
+            fail(
+                f"RPC preflight returned no result for {method}{detail}; "
+                "if eth_rpc_url is a public endpoint, retry once before changing it"
+            )
         return payload["result"]
 
     def fixture_result(self, method: str, params: list[object]) -> object:
