@@ -31,7 +31,7 @@ mixnet.
 | `HowlPaymentAdapter` | `0xfC874B702F8D59B60B35582855505F4f60cE766D` |
 | SOKA (staking and fee asset, 18 decimals) | `0x0F69cf1c9F4FF72471701036dd789c934458e630` |
 | `chain_start_block` | `312414608` |
-| Nox image | `ghcr.io/hisoka-io/nox@sha256:3ad6c66d9a67c1028f06f38a67646c45e8762048b3ebbe0313a270a7bc453e6c` (`0.4.0-rc.11`) |
+| Nox image | `ghcr.io/hisoka-io/nox@sha256:a02842c29f5d0843a4309a318a2e177553abe93c0c0ae31bb1194dd6d20e3d14` (`0.4.0-rc.12`) |
 | Preflight image | `python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9` |
 
 The role templates in `configs/` already carry these values. The manifest is the source of truth: preflight
@@ -174,7 +174,7 @@ record that carries it names the `nox-kps` version in `release.noxKps`; check yo
 python3 -c 'import json; print(json.load(open("deployment.json"))["release"].get("noxKps"))'
 ```
 
-A version (`nox-kps` is versioned with the node release, for example `0.4.0-rc.11`) means the pinned image
+A version (`nox-kps` is versioned with the node release, for example `0.4.0-rc.12`) means the pinned image
 serves KPS. `nox-kps-preflight` checks this, together with `nox-kps.toml` and `config.toml`, every time the
 sidecar starts.
 
@@ -751,6 +751,11 @@ all three writable mounts report numeric owner `10001:10001` from the target ima
 
 `nox-kps` runs from the same `NOX_IMAGE` as the node, so `docker compose up -d` after a pin upgrades both. Keep
 the `nox-kps-identity` volume across upgrades and rollbacks: it holds the key behind your published KPS address.
+
+Moving from `0.4.0-rc.11` to `0.4.0-rc.12`: upgrade one node at a time. rc.12 is a security release with the
+rc.11 configuration keys, stored records and wire formats; it moves libp2p's stream multiplexer to yamux 0.13.10,
+so a malformed yamux frame from a remote peer is handled without a panic. Existing `config.toml` files work as
+they are, and rc.6 to rc.12 nodes interoperate.
 
 Moving from `0.4.0-rc.6`, `0.4.0-rc.9` or `0.4.0-rc.10` to `0.4.0-rc.11`: upgrade one node at a time. rc.6 to
 rc.11 nodes, `nox-kps` relays and all published clients interoperate, and the Sphinx wire, fragment, FEC and SURB
