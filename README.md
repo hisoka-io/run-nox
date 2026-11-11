@@ -96,6 +96,14 @@ Never expose the price server publicly: Compose binds it to `127.0.0.1`. Relays 
 after the price server container without waiting for a fresh price, so a price-API outage does not keep an exit
 off the mixnet; the exit refuses paid requests until it can read fresh prices. The price response consumed by an exit is `{price_e8, observed_at_unix, asset_id, source}`. The exit rejects stale, future-dated, mismatched, unsupported, or malformed observations and performs profitability decisions with integer E8 arithmetic.
 
+### Exit Policy
+
+An exit relays HTTP and HTTPS requests to public hosts, JSON-RPC calls, signed transaction broadcasts, paid
+execution and end-to-end TLS tunnels on TCP 443, and refuses private and special-use destinations
+(`allow_private_ips = false`). What it relays, its limits and the abuse contact are in
+[docs/exit-policy.md](https://github.com/hisoka-io/nox/blob/main/docs/exit-policy.md) in `hisoka-io/nox`; outside
+exits run with that policy.
+
 ### End-to-End TLS Tunnels
 
 From `0.4.0-rc.9` an exit can relay end-to-end TLS tunnels: the client runs TLS itself and the exit relays TLS
@@ -660,6 +668,10 @@ without displaying values.
 Exit token entries are an allowlist. Each configured address must appear in the deployment record's `feeAssets`,
 match on-chain decimals, and have explicit symbol and oracle identifiers in operator config. An unconfigured token
 is rejected rather than priced with a fallback.
+
+`[network] peer_admission` defaults to `enforce`: once the node has verified the node set against the registry
+and a 120 s start-up grace period has passed, it accepts P2P connections and packets only from registered nodes.
+The templates keep the default, as the Hisoka fleet does, so register before you expect peers to connect.
 
 `[relayer] mix_delay_ms` is the average Poisson delay each hop adds: a higher value gives more mixing and more
 latency. The node default is 500; the templates set 40, the value the Hisoka testnet fleet runs. From `0.4.0-rc.9`
